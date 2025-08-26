@@ -1,0 +1,182 @@
+(ns js\http-client
+  (:require phel\trace :refer [dbg])
+  (:require phel\str))
+
+## NOTE: overrides phel\core get function
+
+#### Basic HTTP Client inspired from https://github.com/babashka/http-client/
+
+(defn- m->header [m]
+  (for [[k v] :pairs m]
+    (str (name k) ": " v)))
+
+(defn json-decode "Parse json string to Phel data structure"
+  [s]
+  (php->phel (php/json_decode s true)))
+
+(defn json-encode "Encode Phel data structure to json string"
+  [s]
+  (php/json_encode (phel->php s) true))
+
+(defn- parse-status-line
+  "Parse HTTP status line such as \"HTTP/1.1 301 Moved Permanently\"
+  returning a map." [s]
+  (let [[http-version code reason] (str/split s "/ /" 3)]
+    {:http-version http-version :code (php/intval code) :reason reason}))
+
+(defn- parse-headers
+  "Read HTTP status code and headers from PHP stream meta wrapper_data into a map
+  with redirections recursively nested with key `:Redirection`."
+  [wrapper-data]
+  (loop [remaining wrapper-data
+         result-map {}]
+    (if (empty? remaining) result-map
+      (let [item (first remaining)
+            rest-items (next remaining)]
+        (if (str/starts-with? item "HTTP")
+          (if (contains? result-map :status)
+            (put result-map :redirection
+                 (parse-headers
+                  (concat [item] rest-items)))
+            (recur rest-items (put result-map :status (parse-status-line item))))
+          (recur rest-items (let [[header-name header-data] (str/split item "/: /" 2)]
+                              (put result-map (keyword (str/lower-case header-name)) header-data))))))))
+
+(defn- process-response [content headers]
+  {:status (:code (:status headers))
+   :body content
+   :headers headers})
+
+(defn request
+  "Make an HTTP request with the given URL and options.
+  Options can include:
+  - :method - HTTP method (GET, POST, etc.)
+  - :headers - a map of headers to include in the request
+  - :body - the request body (for POST, PUT, etc.)"
+  [url & [{:method method :headers headers :body body :timeout timeout}]]
+  (println method url)
+  (let [default-headers (if (= method "POST")
+                         {:Accept "*/*"
+                          :Content-Type "application/x-www-form-urlencoded"}
+                         {:Accept "*/*"
+                          :Content-Type "text/plain"})
+        context-params {:http
+                        {:timeout (or timeout 120)
+                         :method method
+                         :header (m->header (merge default-headers headers))
+                         :content (or body "")}}
+        context (php/stream_context_create (phel->php context-params))
+        stream (php/fopen url "r" false context)]
+    (try
+      (if stream
+        ## Stream opened successfully
+        (let [content (php/stream_get_contents stream)
+              meta (php->phel (php/stream_get_meta_data stream))
+              headers (parse-headers (phel\core/get meta "wrapper_data"))]
+          (process-response content headers))
+        ## Stream failed - fallback to get_headers
+        (let [headers (parse-headers (php->phel (php/get_headers url false context)))]
+          (process-response "" headers)))
+      (finally
+        (when stream (php/fclose stream))))))
+
+(defn get
+  "Does GET request with optional extra headers."
+  [url & [opts]]
+  (let [opts (or opts {})]
+    (request url (put opts :method "GET"))))
+
+(defn post
+  "Does POST request with optional payload and extra headers."
+  [url & [opts]]
+  (let [opts (or opts {})]
+    (request url (put opts :method "POST"))))
+
+
+## Usage examples:
+(comment
+
+  (def post-response
+    (post "https://httpbin.org/post"
+          {:body "key1=value1&key2=value2"}))
+
+  ## => {:status 200 :body "{\n  \"args\": {}, \n  \"data\": \"\", \n  \"files\": {}, \n  \"form\": {\n    \"key1\": \"value1\", \n    \"key2\": \"value2\"\n  }, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Content-Length\": \"23\", \n    \"Content-Type\": \"application/x-www-form-urlencoded\", \n    \"Host\": \"httpbin.org\", \n    \"X-Amzn-Trace-Id\": \"Root=1-68a88f21-0ef965d02add1f756d8a2866\"\n  }, \n  \"json\": null, \n  \"origin\": \"91.155.207.172\", \n  \"url\": \"https://httpbin.org/post\"\n}\n" :headers {:status {:http-version "HTTP/1.1" :code 200 :reason "OK"} :date "Fri, 22 Aug 2025 15:39:27 GMT" :content-type "application/json" :content-length "420" :connection "close" :server "gunicorn/19.9.0" :access-control-allow-origin "*" :access-control-allow-credentials "true"}}
+
+  (def post-json-response
+    (post "https://httpbin.org/post"
+          {:body "{\"name\":\"John\",\"age\":30}"
+           :headers {:Content-Type "application/json"}}))
+
+  ## => {:status 200 :body "{\n  \"args\": {}, \n  \"data\": \"{\\\"name\\\":\\\"John\\\",\\\"age\\\":30}\", \n  \"files\": {}, \n  \"form\": {}, \n  \"headers\": {\n    \"Accept\": \"*/*\", \n    \"Content-Length\": \"24\", \n    \"Content-Type\": \"application/json\", \n    \"Host\": \"httpbin.org\", \n    \"X-Amzn-Trace-Id\": \"Root=1-68a88f79-5c17793c6d47b8134ec3a0d8\"\n  }, \n  \"json\": {\n    \"age\": 30, \n    \"name\": \"John\"\n  }, \n  \"origin\": \"91.155.207.172\", \n  \"url\": \"https://httpbin.org/post\"\n}\n" :headers {:status {:http-version "HTTP/1.1" :code 200 :reason "OK"} :date "Fri, 22 Aug 2025 15:40:43 GMT" :content-type "application/json" :content-length "422" :connection "close" :server "gunicorn/19.9.0" :access-control-allow-origin "*" :access-control-allow-credentials "true"}}
+
+  (json-decode "{\"name\":\"John\",\"age\":30}")
+  # => {"name" "John" "age" 30}
+
+  (parse-status-line "HTTP/1.1 301 Moved Permanently")
+  (select-keys (get "https://two.wordpress.test/test") [:status :headers])
+  (:status (get "https://two.wordpress.test/test"))
+  (:status (:headers (get "https://two.wordpress.test/test")))
+  (keys (get "https://two.wordpress.test/test"))
+
+  (defn get-deepest
+    "Helper for fetching deepest key from nested map, can be useful with
+    redirected requests."
+    [m key]
+    (if (and (map? m) (contains? m key))
+      (let [nested (get m key)]
+        (if (and (map? nested) (contains? nested key))
+          (recur nested key)
+          nested))
+      nil))
+
+  (get "http://one.wordpress.test/wp-json/wp/v2/"
+       {:headers {:user-agent "ScriptAgent"}
+        :timeout 300})
+
+  )
+
+### 301 header parsing, PHP by default follows redirects (cannot be changed)
+(comment
+  (time (parse-headers wrapper-data))
+
+  {:Status "HTTP/1.1 301 Moved Permanently"
+   :Server "nginx"
+   :Date "Mon, 18 Aug 2025 17:48:28 GMT"
+   :Content-Type "text/html; charset=UTF-8"
+   :Content-Length "0"
+   :Connection "close"
+   :Expires "Mon, 18 Aug 2025 18:48:28 GMT"
+   :Cache-Control "s-maxage=2592000"
+   :X-Redirect-By "FooServer"
+   :Location "https://example.com/fi/foo/"
+   :Redirection {:Status "HTTP/1.1 200 OK"
+                 :Server "nginx"
+                 :Date "Mon, 18 Aug 2025 17:48:29 GMT"
+                 :Content-Type "text/html; charset=UTF-8"
+                 :Connection "close"
+                 :Vary "Accept-Encoding"
+                 :Cache-Control "max-age=0, s-maxage=2592000"
+                 :Expires "Mon, 18 Aug 2025 17:48:29 GMT"}}
+
+  (def wrapper-data
+    ["HTTP/1.1 301 Moved Permanently"
+     "Server: nginx"
+     "Date: Mon, 18 Aug 2025 17:48:28 GMT"
+     "Content-Type: text/html; charset=UTF-8"
+     "Content-Length: 0"
+     "Connection: close"
+     "Expires: Mon, 18 Aug 2025 18:48:28 GMT"
+     "Cache-Control: max-age=3600"
+     "X-Redirect-By: FooServer"
+     "Location: https://example.com/fi/foo/"
+     "Cache-Control: s-maxage=2592000"
+     "HTTP/1.1 200 OK"
+     "Server: nginx"
+     "Date: Mon, 18 Aug 2025 17:48:29 GMT"
+     "Content-Type: text/html; charset=UTF-8"
+     "Connection: close"
+     "Vary: Accept-Encoding"
+     "Cache-Control: max-age=0, s-maxage=2592000"
+     "Expires: Mon, 18 Aug 2025 17:48:29 GMT"
+     "Vary: Accept-Encoding"])
+  )

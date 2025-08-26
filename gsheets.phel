@@ -1,0 +1,139 @@
+(ns js\gsheets
+  (:require phel\trace :refer [dbg])
+  (:use \Google_Client)
+  (:use \Google_Service_Sheets)
+  (:use \Google_Service_Sheets_ValueRange)
+  (:use \Google_Service_Sheets_ClearValuesRequest))
+
+## NOTE: only single authentication session supported for now, could be fixed by
+##       moving ns defs into struct that could be passed to functions.
+(def keyfile "service_account_key.json")
+
+(def google-client
+  (doto (php/new Google_Client)
+    (php/-> (setScopes (to-php-array [(php/:: Google_Service_Sheets SPREADSHEETS)])))
+    (php/-> (setAuthConfig keyfile))))
+
+(def sheets-service (php/new Google_Service_Sheets google-client))
+(def sheets         (php/-> sheets-service spreadsheets))
+(def sheets-values  (php/-> sheets-service spreadsheets_values))
+
+(defn get-sheet [sheet-id]
+  (php/-> sheets (get sheet-id)))
+
+(defn- get-range-object
+  "Get range values returning spreadsheet object (read-only)
+  Unused but available if range object is required for some reason
+  range-str uses format Sheet1!A1:F10"
+  [sheet-id range-str]
+  (php/-> sheets-values (get sheet-id range-str)))
+
+(defn get-range
+  "Fetch range and get values converting them to 2-dimensional Phel vector.
+   range-str uses format Sheet1!A1:F10"
+  [sheet-id range-str]
+  (php->phel (php/-> sheets-values (get sheet-id range-str) (getValues))))
+
+(defn append-range
+  "Append range values given as 2D vector appending to first empty rows starting
+  from given range."
+  [sheet-id range-str data]
+  (let [value-range (doto (php/new Google_Service_Sheets_ValueRange)
+                      (php/-> (setValues (phel->php data))))
+        options (phel->php {"valueInputOption" "USER_ENTERED"})]
+    (php/-> sheets-values (append sheet-id range-str value-range options))))
+
+(defn update-range
+  "Update range values given as 2D vector in given range."
+  [sheet-id range-str data]
+  (let [value-range (doto (php/new Google_Service_Sheets_ValueRange)
+                      (php/-> (setValues (phel->php data))))
+        options (phel->php {"valueInputOption" "USER_ENTERED"})]
+    (php/-> sheets-values (update sheet-id range-str value-range options))))
+
+(defn clear-range
+  "Deletes range values in given range."
+  [sheet-id range-str]
+  (let [clear (php/new Google_Service_Sheets_ClearValuesRequest)]
+    (php/-> sheets-values (clear sheet-id range-str clear))))
+
+(defn tabular->map
+  "Convert 2D vector of spreadsheet rows and column names on first row into
+   vector of maps with column names as keyword keys."
+  [v]
+  (let [colnames (first v)  # ["ID" "Username" "Email"]
+        values   (rest v)]  # [["1" "erin" "e@example.com"]...]
+    (map |(for [[i colname] :pairs colnames :reduce [entry {}]]
+            (put entry (keyword colname) (get $ i))) values)))
+
+(defn map->tabular [m]
+  (let [column-keywords (keys (first m))
+        rows            (map |(map (partial get $) column-keywords) m)]
+    (cons (map name column-keywords) rows)))
+
+(comment
+  ## Public example sheet (read-only)
+  ## https://docs.google.com/spreadsheets/d/1V4HgE8AIw37TmECLJH-te9iA2VMlRSh5ZrkVUzel69w/edit?usp=sharing
+  (def sheet-id "1V4HgE8AIw37TmECLJH-te9iA2VMlRSh5ZrkVUzel69w")
+
+  ### Sheet1 - Basic reading example:
+
+  ##   A B
+  ## 1|a|b|
+  ## 2|c|d|
+
+  (php/var_dump (get-range-object sheet-id "Sheet1"))
+  ## => Outputs a lot of PHP object metadata
+
+  (get-range sheet-id "Sheet1")
+  ## => [["a" "b"] ["c" "d"]]
+
+
+  ## Sheet2 - Converting tabular data to maps example:
+
+  ## ID Username Email
+  ## 1  erin     e@example.com
+  ## 2  joe      e@example.com
+  ## 3  alfred   a@example.com
+  ## 4  tim      t@example.com
+
+  (get-range sheet-id "Sheet2")
+  ## => [["ID" "Username" "Email"] ["1" "erin" "e@example.com"] ["2" "joe" "e@example.com"] ["3" "alfred" "a@example.com"] ["4" "tim" "t@example.com"]]
+
+  (tabular->map (get-range sheet-id "Sheet2"))
+  ## => [{:ID "1" :Username "erin" :Email "e@example.com"} {:ID "2" :Username "joe" :Email "e@example.com"} {:ID "3" :Username "alfred" :Email "a@example.com"} {:ID "4" :Username "tim" :Email "t@example.com"}]
+
+  (map->tabular (tabular->map (get-range sheet-id "Sheet2")))
+  ## => [["ID" "Username" "Email"] ["1" "erin" "e@example.com"] ["2" "joe" "e@example.com"] ["3" "alfred" "a@example.com"] ["4" "tim" "t@example.com"]]
+
+  (let [tabular-data (get-range sheet-id "Sheet2")]
+    (= tabular-data
+       (map->tabular (tabular->map tabular-data))))
+  ## => true
+
+
+  ### Sheet3 - Examples with append and update on empty sheet (not publicly writable)
+
+  (get-range sheet-id "Sheet3")
+  ## => nil
+
+  (append-range sheet-id "Sheet3" [["Fruit" "Quantity" "Price"]])
+  (get-range sheet-id "Sheet3")
+  ## => [["Fruit" "Quantity" "Price"]]
+
+  (append-range sheet-id "Sheet3" [["Banana" 3 1.25]
+                                   ["Apple" 5 2.45]])
+
+  (get-range sheet-id "Sheet3")
+  ## => [["Fruit" "Quantity" "Price"] ["Banana" "3" "1.25"] ["Apple" "5" "2.45"]]
+
+  (update-range sheet-id "Sheet3!A2" [["Banana" 9 1.25]
+                                      ["Apple" 15 2.45]])
+
+  (get-range sheet-id "Sheet3")
+  ## => [["Fruit" "Quantity" "Price"] ["Banana" "9" "1.25"] ["Apple" "15" "2.45"]]
+
+  (clear-range sheet-id "Sheet3!A2:D3")
+  (get-range sheet-id "Sheet3")
+  ## => [["Fruit" "Quantity" "Price"]]
+  )

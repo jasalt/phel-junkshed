@@ -1,0 +1,13 @@
+(ns js\utils)
+
+## Various utility functions
+
+(defn m->header [m]
+  (for [[k v] :pairs m]
+    (str (name k) ": " v)))
+
+(defn printr [obj]
+  (php/print_r obj))
+
+(defn methods [obj]
+  (println (php/get_class_methods obj)))
