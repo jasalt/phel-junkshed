@@ -1,0 +1,142 @@
+(ns js\validate-opts
+  (:require js\wp))
+
+## Option map validation taking some inspiration from https://github.com/babashka/cli
+## Validates opts map given in following format:
+
+(comment
+  {:pdo-conn
+   {:require  true                      # this should be set
+    :validate 'pdo/connection?          # function used for validation, quoted so it's definition can be printed on failure
+    :default |(wp/pdo-get-connection)}  # default value used by set-missing-opts-to-defaults, returns pdo connection using WPDB connection info
+
+   :excluded-barcode-prefixes
+   {:require  true :validate '|(and (vector? $) (all? string? $))
+    :default  |(get-excluded-barcode-prefixes)}
+
+   :negative-stock-policy
+   {:require  true
+    :validate '|(contains? php/ODOO_POL_SYNC_NEGATIVE_STOCK_POLICIES $)
+    :default  |(wp/get-cf-option
+                (str php/ODOO_POS_DB_PREFIX "_negative_stock_policy"))}
+   :initiator
+   {:require false
+    :validate '|(= :string (type $))}})
+
+## For now the example and some tests rely on WordPress installation with
+## Carbon Fields plugin as this is ripped out from plugin code, sorry.
+
+(defn validate-opts
+  "Validates opts map, returns true or throws `InvalidArgumentException` with
+  details in message on failure."
+  [opts-spec opts]
+  (when-not (hash-map? opts)
+    (throw (php/new \InvalidArgumentException
+                    (str "Invalid opts type, expected hash-map, got " (type opts)))))
+
+  (let [required-opts (for [[k v] :pairs opts-spec :when (true? (:require v))] k)
+        missing-opts (filter |(not (contains? opts $)) required-opts)]
+
+    (when-not (empty? missing-opts)
+      (throw (php/new \InvalidArgumentException
+                      (str "Missing required opts " missing-opts))))
+
+    (let [failing-validations
+          (for [[k v] :pairs opts
+                :let [validator-declaration (:validate (k opts-spec))
+                      validator-fn (eval validator-declaration)]
+                :when (not (validator-fn v))]
+            {:key k :value v :validate-fn validator-declaration})]
+      (when-not (empty? failing-validations)
+        (throw
+         (php/new \InvalidArgumentException
+                  (str "Invalid opts values " failing-validations)))))
+    true))
+
+(defn set-missing-opts-to-defaults
+  "Given `opts` map (or nil) returns opts map with missing opts added with
+  default values. Invalid opt values will pass through, validation required."
+  [opts-spec & [opts]]
+  (let [opts (or opts {})
+        default-opts-to-add
+        (for [[opt-key opt-spec-map] :pairs opts-spec
+              :let [default-fn (:default opt-spec-map)]
+              :when (and (not (nil? default-fn))
+                         (not (contains? opts opt-key)))
+              :reduce [acc {}]]
+          (put acc opt-key (default-fn)))]
+    (merge default-opts-to-add opts)))
+
+
+#### Tests (copy pasted from another ns):
+
+(comment
+  (deftest set-missing-opts-to-defaults
+    (is (hash-map? (set-missing-opts-to-defaults opts-spec nil)) "returns hash-map for nil")
+    (is (true? (validate-opts opts-spec (set-missing-opts-to-defaults opts-spec nil))) "..which passes validate-opts")
+
+    (let [faulty-opts {:pdo-conn 123}
+          faulty-opts-with-defaults-added (set-missing-opts-to-defaults opts-spec faulty-opts)]
+      (is (hash-map? faulty-opts-with-defaults-added) "opts map with faulty values passes through and ")
+      (is (< (count (keys faulty-opts)) (count (keys faulty-opts-with-defaults-added))) "..gets default opt keys added")
+      (is (= 123 (:pdo-conn faulty-opts-with-defaults-added)) "..keeps original (invalid) opt value")
+      (is (thrown? \InvalidArgumentException
+                   (validate-opts opts-spec faulty-opts-with-defaults-added)) "..but fails on validation")
+      )
+    )
+
+  (deftest validate-opts
+    (is (thrown? \InvalidArgumentException (validate-opts opts-spec "FOO")) "exception thrown for non hash map opts")
+    (is (thrown? \InvalidArgumentException (validate-opts opts-spec {})) "exception thrown for empty opts")
+
+    ## TODO currently not implemented
+    ## (is (thrown? \InvalidArgumentException
+                    ##              (validate-opts {:non-nil-key {:require true}} {:non-nil-key nil})
+                    ##              ) "exception thrown for empty opts")
+
+    (is (thrown? \InvalidArgumentException
+                 (validate-opts opts-spec {:excluded-barcode-prefixes ["test" "123"]}))
+        "exception thrown for partially missing required opts")
+
+    (is (thrown? \InvalidArgumentException
+                 (validate-opts opts-spec {:pdo-conn "Foo"
+                                           :negative-stock-policy "default"
+                                           :excluded-barcode-prefixes ["test" "123"]})
+                 )
+        "exception thrown for opts failing validation")
+
+    (let [pdo-conn (wp/pdo-get-connection)]
+      (is (thrown? \InvalidArgumentException
+                   (validate-opts opts-spec {:pdo-conn pdo-conn
+                                             :negative-stock-policy "FOO"
+                                             :excluded-barcode-prefixes ["test" "123"]})
+                   )
+          "exception thrown for invalid negative-stock-policy opt ")
+      (is (thrown? \InvalidArgumentException
+                   (validate-opts opts-spec {:pdo-conn pdo-conn
+                                             :negative-stock-policy "FOO"
+                                             :excluded-barcode-prefixes ["test" "123"]})
+                   )
+          "exception thrown for invalid negative-stock-policy opt ")
+
+      (is (thrown? \InvalidArgumentException
+                   (validate-opts opts-spec {:pdo-conn pdo-conn
+                                             :negative-stock-policy "default"
+                                             :excluded-barcode-prefixes "TEST"}))
+          "exception thrown for invalid excluded-barcode-prefixes opt")
+
+      (is (thrown? \InvalidArgumentException
+                   (validate-opts opts-spec {:pdo-conn pdo-conn
+                                             :negative-stock-policy "default"
+                                             :excluded-barcode-prefixes ["TEST" 123]})
+                   )
+          "exception thrown for invalid excluded-barcode-prefixes opt")
+
+      (is (true?
+           (validate-opts opts-spec {:pdo-conn pdo-conn
+                                     :negative-stock-policy "default"
+                                     :excluded-barcode-prefixes ["test" "123"]}))
+          "successful opts validation")
+      )
+    )
+  )
