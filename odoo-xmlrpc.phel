@@ -1,0 +1,406 @@
+(ns js\odoo-xmlrpc
+  (:require phel\str :as str)
+  (:require js\wp :as wp)
+  (:use \Laminas\XmlRpc\Client))
+
+### Phel wrapper for Laminas XMLRPC library and Odoo XMLRPC-API
+## Works with Odoo.com (also free-tier) and self-hosted
+## Mostly focused around POS module functionality but extending should be trivial
+
+## Docs:
+## - https://docs.laminas.dev/laminas-xmlrpc/client/
+## - https://www.odoo.com/documentation/18.0/developer/reference/external_api.html
+## - https://www.odoo.com/documentation/18.0/developer/reference/backend/orm.html
+
+(defn odoo-rpc-connection?
+  "Validate odoo-rpc-connection map as if it was a struct (providing validation fn).
+  TODO redefining struct (in REPL) leads to error, how to avoid running on reload?
+  e.g. (defstruct odoo-rpc-connection [uid password db-name api-common api-object])"
+  [conn]
+  (= (apply set (keys conn)) (set :uid :password :db-name :api-common :api-object)))
+
+(defn connect
+  "returns odoo-rpc-connection (struct-like) map that is used as first parameter
+  with rpc functions `password` is either api key or account password"
+  [username password instance-url db-name]
+
+  (if (contains-value? [username password instance-url db-name] "")
+    (throw (php/new \Exception "One of parameters was not set for connect, cannot proceed with Odoo XMLRPC connection, make sure Odoo API credentials are set correctly.")))
+
+  (when-not (or (str/starts-with? instance-url "http://localhost:")
+                (str/starts-with? instance-url "http://odoo:8069")
+                (str/starts-with? instance-url "https://"))
+      (throw (php/new \Exception "Connection to Odoo XMLRPC over unsafe HTTP is not allowed outside localhost.")))
+
+  (let [api-common
+        (php/-> (php/new \Laminas\XmlRpc\Client (str instance-url "/xmlrpc/2/common"))
+                (getProxy))
+        api-object
+        (php/-> (php/new \Laminas\XmlRpc\Client (str instance-url "/xmlrpc/2/object"))
+                (getProxy))
+        uid (php/-> api-common (login db-name username password))]
+
+    (when-not (= (type uid) :int)
+      (throw (php/new \Exception
+                      (str "Odoo login problem, uid should be integer but is " (type uid)))))
+    # (odoo-rpc-connection uid password db-name api-common api-object)  # BUG
+    {:uid uid :password password :db-name db-name
+     :api-common api-common :api-object api-object}))
+
+## TODO move non-generic library fns somewhere else
+(defn connect-using-wp-credentials
+  "Get connection to Odoo using credentials set in WP plugin settings.
+  In REPL, wp-load.php needs to have been required."
+  []
+  (let [odoo_username (wp/get-cf-option (str php/ODOO_PREFIX "_username"))
+        odoo_password (wp/get-cf-option (str php/ODOO_PREFIX "_password"))
+        odoo_url      (wp/get-cf-option (str php/ODOO_PREFIX "_url"))
+        odoo_db       (wp/get-cf-option (str php/ODOO_PREFIX "_db"))]
+    (connect odoo_username odoo_password odoo_url odoo_db)))
+
+
+### Basic CRUD functions
+
+(defn- validate-conn [conn]
+  (when (not (odoo-rpc-connection? conn))
+    (throw (php/new \TypeError (str "conn is not odoo-rpc-connection struct, got " (type conn))))))
+
+(defn- validate-model [model]
+  (when (not (string? model))
+    (throw (php/new \TypeError (str "model is not string, got " (type model))))))
+
+#(defn- validate-ids [ids] # TODO
+#  (when (not ...)
+#    (throw (php/new \TypeError (str "ids is not array of ints, got " (type ids))))))
+
+(defn keyword-map-to-php-array
+  "Helper function for passing Phel hash maps to RPC calls
+  Converts map keyword keys into strings."
+  [m]
+  (to-php-array (for [[k v] :pairs m :reduce [acc {}]]
+                  (put acc (case (type k)
+                             :keyword (name k)
+                             k) v))))
+
+(defn rpc-create
+  "Creates a single record and returns its database identifier.
+  While payload is wrapped in sequential ds, Odoo expects single item inside it
+  and throws positional argument exception when multiple are passed."
+  [conn model data]
+  (validate-conn conn)
+  (validate-model model)
+  (when-not (hash-map? data)
+    (throw (php/new \InvalidArgumentException
+                    (str "rpc-create expects map for m but got " (type data)))))
+
+  (php/-> (get conn :api-object)
+          (execute_kw (get conn :db-name) (get conn :uid) (get conn :password)
+                      model "create"
+                      (php/array (keyword-map-to-php-array data)))))
+
+(defn rpc-update
+  "Update `model` records set by `ids` with values in `data` map."
+  [conn model ids data]
+  (validate-conn conn)
+  (validate-model model)
+  (php/-> (get conn :api-object)
+          (execute_kw (get conn :db-name) (get conn :uid) (get conn :password)
+                      model "write"
+                      (php/array (to-php-array ids)
+                                 (keyword-map-to-php-array data)))))
+
+(defn rpc-delete
+  "Delete model records by ids given as vector"
+  [conn model ids]
+  (validate-conn conn)
+  (validate-model model)
+  (php/-> (get conn :api-object)
+          (execute_kw (get conn :db-name) (get conn :uid) (get conn :password)
+                      model "unlink"
+                      (php/array (to-php-array ids)))))
+
+(defn rpc-read
+  "Fetch records for vector of ids. Opts map accepts :fields [str*]."
+  [conn model ids & [opts]]
+  (validate-conn conn)
+  (validate-model model)
+  (let [opts (if opts opts {})]  # opts default to empty map
+       (php/-> (get conn :api-object)
+               (execute_kw (get conn :db-name) (get conn :uid) (get conn :password)
+                           model "read"
+                           (php/array (to-php-array ids))
+                           (to-php-array {"fields" (to-php-array (opts :fields))})))))
+
+### Misc Odoo XMLRPC functions
+
+(defn rpc-search-read
+  "Queries search_read endpoint returning resulting records.
+  Accepts optional :filters :fields :limit in `opts` map with following format:
+  :filters [[str str val]*] vector of three item vectors, each converting to Python
+           triple (field_name, operator, value), consult Odoo ORM domain filter docs:
+           https://www.odoo.com/documentation/18.0/developer/reference/backend/orm.html#reference-orm-domains
+  :limit int
+  :fields [str*]"
+  [conn model & [opts]]
+  (validate-conn conn)
+  (validate-model model)
+  (let [opts (if opts opts {})]  # opts default to empty map
+       (php/-> (get conn :api-object)
+               (execute_kw (get conn :db-name) (get conn :uid) (get conn :password)
+                           model
+                           "search_read"
+                           (php/array (to-php-array (map to-php-array (opts :filters))))
+                           (to-php-array {"fields" (to-php-array (opts :fields))
+                                          "limit" (opts :limit)})))))
+
+### Higher level helper functions
+### Model extension / "Custom Fields"
+
+(defn add-field
+  "Add field to model.
+  The model_id is automatically set based on given `model_name`.
+  Documentation tells that custom model names must start with x_ and
+  state must be provided and set to manual, otherwise the model will not be
+  loaded."
+  [conn model field-data]
+  (validate-conn conn)
+  (validate-model model)
+  (let [model-id
+        (-> (rpc-search-read conn "ir.model" {:filters [["model" "=" model]]
+                                         :fields ["id"]})
+            first
+            (get "id"))
+        new-field-data (put field-data :model_id model-id)
+        new-field-id (rpc-create conn "ir.model.fields" new-field-data)]
+    new-field-id))
+
+(defn get-field
+  [conn model field-name]
+  (validate-conn conn)
+  (validate-model model)
+  (first (rpc-search-read conn "ir.model.fields"
+                          {:filters [["name" "=" field-name]
+                                     ["model" "=" model]]})))
+(defn get-fields
+  [conn model]
+  (validate-conn conn)
+  (validate-model model)
+  (rpc-search-read conn "ir.model.fields"
+                          {:filters [["model" "=" model]]}))
+
+(defn delete-field
+  [conn model field-name]
+  (validate-conn conn)
+  (validate-model model)
+  (rpc-delete conn "ir.model.fields" [(get (get-field conn model field-name) "id")]))
+
+### product.product
+
+## NOTE tax excluded if odoo configured to include
+(defn create-product
+  "Create single product in Odoo with data in map.
+  Returns product id when successful and throws error otherwise."
+  [conn m]
+  (rpc-create conn "product.product" m))
+
+(defn get-product-by-barcode [conn barcode]
+  (php-array-to-map
+   (first (rpc-search-read conn "product.product"
+                                {:filters [["barcode" "=" barcode]]
+                                 :limit 1}))))
+
+(defn get-product-by-id [conn product-id]
+  (php-array-to-map
+   (first (rpc-search-read conn "product.product"
+                                {:filters [["id" "=" product-id]]
+                                 :limit 1}))))
+(defn update-product
+  "Update single product in Odoo with data in map.
+  Return true for success and throws error otherwise."
+  [conn product-id m]
+  (rpc-update conn "product.product" [product-id] m))
+
+(defn update-product-by-barcode
+  "Updates Odoo product by barcode, returns product id on success."
+  [conn barcode m]
+  (let [odoo-id (get (get-product-by-barcode conn barcode) "id")]
+    (if (int? odoo-id)
+      (do (update-product conn odoo-id m)
+          odoo-id)
+      (throw
+       (php/new \RuntimeException
+                "update-product-by-barcode cannot resolve odoo-id for update")))))
+
+(defn delete-product
+  "Delete single product in Odoo."
+  [conn product-id]
+  (rpc-delete conn "product.product" [product-id]))
+
+(defn upsert-product
+  "Create product or attempt to update existing.
+  Returns Odoo product id on successful creation or update update."
+  [conn m]
+  (try
+    (create-product conn m)
+    (catch \Laminas\XmlRpc\Client\Exception\FaultException e
+      (update-product-by-barcode conn (:barcode m) m))))
+
+
+#### TESTS (just some basics, should set this up properly for this repo)
+
+(comment
+
+  (deftest keyword-map-to-php-array
+    (let [input-map {:name "New Product"
+                     :type "product"
+                     :list_price 10.0
+                     :barcode "1231231231234"
+                     :available_in_pos true}
+          result-map {"name" "New Product"
+                      "type" "product"
+                      "list_price" 10.0
+                      "barcode" "1231231231234"
+                      "available_in_pos" true}
+          result-php-arr (to-php-array result-map)]
+      (is (= (keyword-map-to-php-array input-map)  result-php-arr) "Converts keywords in hash-map keys correctly")
+      (is (= (keyword-map-to-php-array result-map) result-php-arr) "Keeps string keys as is")))
+
+
+  ## Connection to Odoo using hard coded test credentials for container
+  (def conn (let [odoo_username "test@test.test"   odoo_password "password"
+                  odoo_url      "http://odoo:8069" odoo_db       "bitnami_odoo"]
+              (connect odoo_username odoo_password odoo_url odoo_db)))
+
+  (deftest rpc-api-common-test
+    (is (= 4 (+ 2 2)))
+
+    (is (= (type (get conn :uid)) :int) "uid is integer, login is successful")
+
+    (let [v-info (php/-> (get conn :api-common) (version))]
+      (is (= (type v-info) :php/array) "RPC version returns PHP Array")
+      (is (= (keys (php-array-to-map v-info)) ["server_version" "server_version_info" "server_serie" "protocol_version"])
+          "RPC version returns required set of keys"))
+    )
+
+  # Test assumes that there exists more than one res.parter, and one company has is_company=true which
+  # seems to be the case for odoo.com trial at least.
+
+  (deftest rpc-read-test
+
+    # Test rpc-search-read
+
+    (let [partners (rpc-search-read conn "res.partner")]
+      (is (= (type partners) :php/array) "rpc-search-read returns PHP Array")
+      (is (> (count partners) 1) "rpc-search-read for res.partner returns more than one"))
+
+    (let [partner (rpc-search-read conn "res.partner" {:limit 1})]
+      (is (= (count partner) 1)
+          "rpc-search-read with limit opt works"))
+
+    (let [partners-emails (rpc-search-read conn "res.partner" {:fields ["email"]})]
+      (is (= (-> partners-emails php-array-to-map first keys) ["id" "email"])
+          "rpc-search-read with fields opt works"))
+
+    (let [partner-email (rpc-search-read conn "res.partner" {:fields ["email"] :limit 1})]
+      (is (= (-> partner-email php-array-to-map first keys) ["id" "email"])
+          "rpc-search-read with fields opt works in conjunction to limit")
+      (is (= (count partner-email) 1)
+          "rpc-search-read with limit opt works in conjunction to fields"))
+
+    # Test filtering
+
+    (let [company-partner (rpc-search-read conn "res.partner" {:filters [["is_company" "=" true]]
+                                                               :fields ["is_company"] :limit 1})]
+      (is (= (count company-partner) 1)
+          "rpc-search-read with filters opt works")
+      (is (= (-> company-partner php-array-to-map first keys) ["id" "is_company"])
+          "rpc-search-read with filters opt works in conjunction with fields"))
+
+    (is (thrown? \Laminas\XmlRpc\Client\Exception\FaultException
+                 (rpc-search-read conn "res.partner" {:filters [["GARBAGE_KEY_f0f0f0f0" "=" true]]}))
+        "Filtering by non-existing field value throws")
+
+    # TODO check error message includes "ValueError: Invalid field res.partner.GARBAGE_KEY_f0f0f0f0 in leaf ('GARBAGE_KEY_f0f0f0f0', '=', True)"
+
+    (let [partner (first (rpc-read conn "res.partner" [1] {:fields ["email"]}))]
+      (is (= (type partner) :php/array) "rpc read returns php array")
+      (is (= (keys (php-array-to-map partner)) ["id" "email"]) "rpc read fields option works")
+      # (is (str-contains? (get partner "email") "@") "rpc read partner includes email address")  # Fails with container
+      )
+
+    (is (= 2 (count (odoo/rpc-read conn "ir.model" [1 2] {:fields ["name"]}))) "Read works for multiple")
+
+    )
+
+  (deftest rpc-create-test
+
+    (let [id (rpc-create conn "res.partner" {:name "John Doe"
+                                             :email (str (gensym) "@example.com")})]
+      (is (= (type id) :int) "rpc create returns id for new res.partner")
+
+      (is (true? (rpc-update conn "res.partner" [id] {:name "John Smith"}))
+          "rpc update returns true")
+      (is (= (get (first (rpc-read conn "res.partner" [id] {:fields ["name"]})) "name") "John Smith")
+          "rpc update does update the data")
+
+      (is (true? (rpc-delete conn "res.partner" [id])) "rpc delete returns true")
+      )
+
+    ## Test rpc-add-field
+    ## NOTE Following test might leave a field existing if it is broken, cleanup function:
+    ## (rpc-delete conn "ir.model.fields" [(get (get-field "res.partner" "x_custom_testing_boolean") "id")])
+    ## (delete-field conn "res.partner" "x_custom_testing_boolean")
+
+    (let [model-name "res.partner"
+          field-name "x_custom_testing_boolean"
+          field-data {:name field-name
+                      :ttype "char"
+                      :state "manual"
+                      :required false}
+          _ (is (nil? (get-field conn model-name field-name)) "Field is not initially found.")
+          new-field-id (add-field conn model-name field-data)
+          extended-model-item (php-array-to-map (first (rpc-search-read conn model-name {:limit 1})))]
+
+      (is (thrown? \Laminas\XmlRpc\Client\Exception\FaultException (add-field conn model-name field-data)))
+
+      (is (= (type new-field-id) :int) "add-field returns new field id")
+      (is (contains? extended-model-item field-name) "the field is found as key in model entry")
+
+      (is (= (get (get-field conn model-name field-name) "name") field-name) "The field is found by get-field after creating")
+
+      (is (true? (delete-field conn model-name field-name)) "delete field returns true")
+
+      ## Laminas\XmlRpc\Client\Exception\FaultException: Record does not exist or has been deleted.
+      (is (thrown? \Laminas\XmlRpc\Client\Exception\FaultException (rpc-delete conn "ir.model.fields" [new-field-id])) "Deleting nonexisting fieconn ld throws")
+      )
+
+    )
+  )
+
+## TODO product.product
+(comment
+  (get-product-by-id conn 92)
+  (get-product-by-barcode conn "123123123125") # convert int to str
+
+  (def conn (odoo/connect-using-wp-credentials))
+
+  (create-product conn {:name "New Product"
+                             :description_sale "Bla Bla"  # todo what does production use currently?
+                             :list_price 10.0             # tax excluded if odoo configured to include
+                             :barcode "123123123125"
+                             :available_in_pos true})
+
+  (update-product conn 92 {:list_price 15.0})
+  (delete-product conn 92)  # FaultException: To delete a product, make sure all point of sale sessions are closed.
+
+  )
+
+## TODO test upsert-product triggering the exception so that the thrown message
+##      is confirmed to be as expected (would fail test if the upstream changes)
+
+(comment
+  ## Not used as might break any day on Odoo change
+  (is (thrown-with-msg?
+       \Laminas\XmlRpc\Client\Exception\FaultException
+       "The operation cannot be completed: Field names must be unique per model." (add-field conn model-name field-data))
+      "Adding field with same name should throw message: The operation cannot be completed: Field names must be unique per model."))
