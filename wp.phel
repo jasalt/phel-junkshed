@@ -1,0 +1,335 @@
+(ns js\wp
+  (:require phel\str)
+  (:require phel\pdo)
+  (:require phel\pdo\statement))
+
+### General Phel functions for various WP / PHP API's.
+### See also Phel WP Plugin Skeleton project.
+
+(defn web-request? []
+  (if (php/aget (php/aget php/$GLOBALS "_SERVER") "HTTP_HOST") true false))
+
+(defn cli?
+  "Is current execution context in command line (REPL or test runner)?"
+    []
+  (if (= "vendor/bin/phel" (php/aget (php/aget php/$GLOBALS "_SERVER") "PHP_SELF")) true false))
+
+## Initialize WordPress plugin environment for REPL / tests
+
+(defn resolve-wp-load-path
+  "Resolves wp-load.php either based on environment variable WP_LOAD_DIR or
+  by attempting to load it from path expected in default WordPress installation
+  ../../../wp-load.php" []
+  (let [filename "wp-load.php"
+        env-setting (php/getenv "WP_LOAD_DIR")
+        wp-load-dir (if env-setting env-setting "../../..")
+        wp-load-path (str wp-load-dir php/DIRECTORY_SEPARATOR filename)]
+    (if (php/is_file wp-load-path)
+      wp-load-path
+      (php/new \RuntimeException "Cannot resolve wp-load.php in wp.phel, make sure WP_LOAD_DIR is set if installation is not using default WP directory structure."))))
+
+(when (nil? (get php/$GLOBALS "wpdb"))
+  ## Sets HTTP_HOST that some plugins expect to be set (causes notices otherwise)
+  (when (cli?)
+    (php/aset php/$GLOBALS "_SERVER"
+              (-> (get php/$GLOBALS "_SERVER") php-array-to-map
+                  (put "HTTP_HOST" "127.0.0.1") to-php-array)))
+  (php/require_once (resolve-wp-load-path)))  ## TODO not getting evaluated on server with phel run??
+
+### General WP Utils
+
+(defn debug? []
+  (when (php/defined "WP_DEBUG")
+    (contains-value? ["True" "true" "TRUE"] php/WP_DEBUG)))
+
+### WPDB functions
+### The regular WP database interaction methods with some oddities:
+### - Does not raise errors but returns HTML
+### - Does not cast results as PHP datatypes returning everything as string
+### - dbDelta is nice but can be hazardous, not a proper db migration tool
+### - See also: https://github.com/snicco/better-wpdb
+
+(def wpdb (get php/$GLOBALS "wpdb"))
+
+(defn db-get-prefix [] (php/-> wpdb prefix))
+(defn db-get-collate [] (php/-> wpdb (get_charset_collate)))
+
+(def wp-prefix (db-get-prefix))
+(def collate (db-get-collate))
+
+(defn table-exists? [table-name]
+  (when (php/-> wpdb (get_var (str "SHOW TABLES LIKE '" table-name "';"))) true))
+
+(defn create-table-if-missing! [table-name table-sql]
+  (if (table-exists? table-name)
+    (println "Woo:" table-name "table exists")
+    (do (println "Woo: creating table" table-name)
+        (php/require_once (str php/ABSPATH "wp-admin/includes/upgrade.php"))
+        (php/dbDelta table-sql))))
+
+(defn drop-table! [table-name]
+  (php/-> wpdb (query (str "DROP TABLE IF EXISTS " table-name))))
+
+(defn db-get-results "Returns wpdb result set PHP object" [sql]
+  (php/-> wpdb (get_results sql)))
+
+(defn get-sql-table-name [sql]
+  (let [from-text (if (str/includes? sql " FROM ") "/ FROM /" "/ from /")
+        after-from (second (str/split sql from-text))
+        table-name (first (str/split after-from "/ /" 2))]
+    table-name))
+
+(defn db-insert! [table data]  # TODO rename !
+  "Insert (non-nested) Phel map into DB"
+  (php/-> wpdb (insert table (to-php-array data))))
+
+(defn db-update! [table row-id data]
+  (php/-> wpdb (update table
+                       (phel->php data)               # fields to update
+                       (to-php-array {"id" row-id})))) # where clauses
+
+## Casting from WPDB results (scrapped because PDO works better out-of-box)
+
+(defn get-table-cast-rules
+  "Return map of casting functions for table column names with nil for ones without
+  specific casting function (values are read as string by default)
+  TODO Scrap this as PDO does it out-of-box."
+  [table]
+  (let [table-description (map php-array-to-map
+                               (db-get-results (str "DESCRIBE " table)))
+        ## NOTE hash-map format: {Field id Type bigint(20) Null NO Key PRI Default nil Extra auto_increment}
+
+        cast-fn-by-colname
+        (reduce (fn [init {"Field" col-name "Type" col-type}]
+                  (let [cast-fn
+                        (cond (str/starts-with? col-type "bigint")   php/intval
+                              (str/starts-with? col-type "int")      php/intval
+                              (str/starts-with? col-type "datetime") |(php/new \DateTimeImmutable $)
+                              (str/starts-with? col-type "decimal")  php/floatval
+                              true identity
+                              )
+                        ]
+                    ## (when cast-fn (put init col-name cast-fn))  # TODO fails with error (??)
+                    (put init col-name cast-fn)
+                    )) {} table-description)]
+    cast-fn-by-colname))
+
+(defn cast-db-pol "TODO Scrap this as PDO does it out-of-box." [cast-rules pol]
+  (for [[k v] :pairs pol :reduce [acc {}]]
+    (let [orig {:val v
+                :orig-type (get cast-rules k)}
+          m (if (nil? v) orig
+                (merge orig {:converted-val ((get cast-rules k) v)
+                             :converted-type (type ((get cast-rules k) v))}))]
+      (put acc (keyword k) m))))
+
+(defn db-get-results-casted
+  "Wraps wpdb->get_results and returns vector of hash-maps casting values
+  according to database column types. Slow because not lazy.
+  TODO Scrap this as PDO does it out-of-box."
+  [sql]
+  (let [table-name (get-sql-table-name sql)
+        cast-rules (get-table-cast-rules table-name)
+        db-res (db-get-results sql)]
+    (map |(cast-db-pol cast-rules $) db-res)))
+
+### PHP PDO database driver wrapper (using phel-pdo)
+### For overall better and more standard database interaction compared to WPDB
+### - https://github.com/phel-lang/phel-pdo
+### - https://www.php.net/manual/en/book.pdo.php
+
+(def pdo-connection-string (str "mysql:host=" php/DB_HOST ";dbname="
+                                php/DB_NAME ";charset=" (php/-> wpdb charset)))
+
+(defn pdo-get-connection []
+  (let [conn (pdo/connect pdo-connection-string php/DB_USER php/DB_PASSWORD)]
+    (pdo/exec conn (str "SET NAMES " (php/-> wpdb charset)
+                        " COLLATE "  (php/-> wpdb collate)))
+    conn))
+
+## PDO convenience functions inspired from seancorfield/next-jdbc
+## TODO https://github.com/phel-lang/phel-pdo/issues/4
+
+(defn pdo-fetch-all [conn sql]
+  (let [query (pdo/query conn sql)]
+    (statement/fetch-all query)))
+
+## https://github.com/seancorfield/next-jdbc/blob/56bd2356ac542ff6c3667aec24cb0207dafe4e40/src/next/jdbc/sql.clj#L178
+## TODO allow passing optional id col as with next-jdbc (?)
+(defn pdo-get-by-id [conn table id]
+    (-> (pdo/prepare conn (str "SELECT * FROM " table " WHERE id = :id"))
+        (statement/bind-value :id id)
+        (statement/execute)
+        (statement/fetch)))
+
+## TODO improve after next.jdbc,
+## - return map of generated keys (?)
+## - split into execute-one! (?)
+(defn pdo-insert! "returns new id"
+    [conn table m]
+    (let [m-keys (keys m)
+          column-names (str/join ", " (map name m-keys))
+          placeholders (str/join ", " m-keys)
+          stmt-sql (str "INSERT INTO " table " (" column-names ") "
+                        "VALUES (" placeholders ")")
+          stmt (pdo/prepare conn stmt-sql)]
+
+      (dofor [[k v] :pairs m]
+             (statement/bind-value stmt k v))
+
+      (php/-> (stmt :stmt) (execute))
+      (pdo/last-insert-id conn)))
+
+(defn pdo-update!
+  [conn table row-id m]
+  (let [assignments
+        (str/join ", " (map (fn [k] (str (name k) " = " k)) (keys m)))
+
+        stmt-sql (str "UPDATE " table " "
+                      "SET " assignments " "
+                      "WHERE id = :id")
+        stmt (pdo/prepare conn stmt-sql)]
+
+    (statement/bind-value stmt :id row-id)
+    (dofor [[k v] :pairs m]
+           (statement/bind-value stmt k v))
+
+    (php/-> (stmt :stmt) (execute))
+    (php/-> (stmt :stmt) (rowCount))))
+
+### Routing functions
+
+(defn register-rest-route
+  "Register WP REST API route using map for `args`
+  https://developer.wordpress.org/reference/functions/register_rest_route/"
+  [api-ns route args]
+  (php/register_rest_route api-ns route (to-php-array args)))
+
+(defn register-htmx-route
+  "Register WP AJAX handler doing capability check and returning HTML
+  `name` should be snake case and becomes /wp-admin/admin-ajax.php?action=name
+  `capability` str is verified with current_user_can
+  `handler` fn may take one argument which is request object
+  https://developer.wordpress.org/reference/hooks/wp_ajax_action/"
+  [name capability handler]
+  (php/add_action (str "wp_ajax_" name)
+                  (fn [ajax-req]  # TODO does ajax-req exist actually?
+                    (if-not (php/current_user_can capability)
+                      (php/wp_die "Unauthorized")
+                      (let [handler-html (handler ajax-req)]
+                        (php/wp_die handler-html))))))
+
+(defn register-datastar-route
+  "Register WP AJAX handler doing capability check and returning HTML
+  `name` should be snake case and becomes /wp-admin/admin-ajax.php?action=name
+  `capability` str is verified with current_user_can
+  `handler` fn may take one argument which is request object
+  https://developer.wordpress.org/reference/hooks/wp_ajax_action/"
+  [name capability handler]
+  (php/add_action (str "wp_ajax_" name)
+                  (fn [ajax-req]  # TODO does ajax-req exist actually?
+                    (if-not (php/current_user_can capability)
+                      (php/wp_die "Unauthorized")
+                      (do
+                        (handler)
+                        (php/die)
+                        )))))
+
+### WordPress data
+
+(defn get-user-by-login [email]
+  (php/get_user_by "login" email))
+
+(defn get-user-by-id [id]
+  (php/get_user_by "id" id))
+
+(defn email-exists? [email]
+  (int? (php/email_exists email)))
+
+(defn user-to-map
+  "Returns Phel hashmap for WP_User PHP object with properties as
+  string keys e.g. `data` `ID` `caps` `cap_key` `roles` `allcaps` `filter`.
+  Useful for printing and processing printing user data."
+  [user-obj]
+  (let [m (php->phel (php/get_object_vars user-obj))
+        data (php->phel (php/get_object_vars (get m "data")))]
+    (put m "data" data)))
+
+### WooCommerce specific
+
+(defn wc-get-product-id-by-barcode
+  "Takes `barcode` string and returns found post_id as string, or nil.
+  NOTE: 0 returned from php/wc_get_product_id_by_sku results to nil instead."
+  [barcode]
+  (let [pid-query (php/wc_get_product_id_by_sku barcode)]
+    (when-not (= pid-query 0) pid-query)))
+
+(defn wc-get-stock-quantity [product-id]
+  (when-not (number? product-id)
+    (throw (php/new \InvalidArgumentException
+                    (str (type product-id)
+                         " given while wc-get-stock-quantity expects"
+                         " product-id to be a number"))))
+  (let [woo-product (php/wc_get_product product-id)]
+    (when woo-product
+      (php/-> woo-product (get_stock_quantity)))))
+
+(defn wc-set-stock-quantity [product-id qty]
+  (when-not (and (int? product-id) (number? qty))
+    (throw (php/new \InvalidArgumentException
+                    (str (type product-id) " " (type qty)
+                         " given while wc-set-stock-quantity expects"
+                         " arguments to be a integer and a number"))))
+  (let [woo-product (php/wc_get_product product-id)]
+    (when woo-product
+      (php/-> woo-product (set_stock_quantity qty))
+      (php/-> woo-product (save)))))
+
+## Custom WC functions
+
+(defn wc-set-stock-quantity-by-barcode [barcode qty]
+  (let [pid (wc-get-product-id-by-barcode barcode)]
+    (when pid (wc-set-stock-quantity pid qty))))
+
+(defn wc-get-stock-quantity-by-barcode [barcode]
+  (let [pid (wc-get-product-id-by-barcode barcode)]
+    (when pid (wc-get-stock-quantity pid))))
+
+(defn wc-delete-product-by-barcode [barcode]
+  (let [product-id (wc-get-product-id-by-barcode barcode)]
+    (php/wp_delete_post product-id true)))
+
+(defn wc-create-random-product
+  "Generates random WooCommerce product for testing."
+  [& [barcode]]
+  (let [barcode (or barcode (str "demo_" (rand-int 100000000)))
+        generated-price (php/number_format (/ (php/mt_rand 200 100000) 100) 2 "." "")
+        product-obj (doto (php/new \WC_Product_Simple)
+                      (php/-> (set_name (str "DEMO " barcode)))
+                      (php/-> (set_status "publish"))
+                      (php/-> (set_catalog_visibility "visible"))
+                      (php/-> (set_manage_stock true))
+                      (php/-> (set_stock_quantity 100))
+                      (php/-> (set_description "Generated product."))
+                      (php/-> (set_sku barcode))
+                      (php/-> (set_regular_price generated-price)))]
+
+    (when (= (rand-int 5) 4)  # add sale price to some
+      (php/-> product-obj (set_sale_price (- (php/floatval generated-price) 1))))
+
+    (let [new-id (php/-> product-obj (save))]
+      (println "created" (php/wc_get_product new-id))
+      new-id)))
+
+### Misc plugin specific functions
+
+(defn get-cf-option
+  "Return Carbon Fields option value for given `option-key`.
+  For empty field value '' return nil instead of empty string.
+  https://carbonfields.net/
+  NOTE: Secure Custom Fields is probably better supported equally paywall free plugin."
+  [option-key]
+  (let [raw-value (php/carbon_get_theme_option option-key)]
+    (when (or (= :boolean (type raw-value))
+              (not (empty? raw-value)))
+      raw-value)))
