@@ -1,0 +1,80 @@
+(ns js\sitemap
+  (:require js\utils :refer [m->header])
+  (:require phel\str)
+  (:use \DOMDocument))
+
+;; Utilities for downloading and extracting urls from sitemaps on remote servers.
+;; Example of downloading files and basic XML parsing.
+
+(defn parse-xml-loc-tags
+  "Parses urls from loc tags in XML string returning vector of strings."
+  [xml-string]
+  (let [dom (doto (php/new DOMDocument)
+              (php/-> (loadXML xml-string)))
+        loc-nodes (php/-> dom (getElementsByTagName "loc"))]
+    (map |(php/-> $ nodeValue) loc-nodes)))
+
+(defn download
+  "Download sitemap from url e.g. https://example.com/sitemap.xml returning
+  the contents as string."
+  [url & [extra-headers]]
+  (println "Downloading...")
+  (let [context (php/stream_context_create
+                 (phel->php
+                  {:http
+                   {:method "GET"
+                    :header
+                    (m->header
+                     (merge {:Accept "*/*"
+                             :Content-Type "text/plain"}
+                            extra-headers))
+                    ;; :ignore_errors true
+                    }}))]
+    (php/file_get_contents url false context)))
+
+;; Wrap original function with memoization which is convenient in REPL
+(def download-cached (memoize download))
+
+(defn load
+  "Recursively fetches XML sitemaps from given url returning all of the parsed
+  urls as a single vector of strings.
+  `skip-endings`: optional sequential collection with url endings to skip e.g.
+                  [\".jpg\" \"sitemap-to-skip.xml\"]
+  `extra-headers`: optional map of extra HTTP headers, HTTP Basic Auth example:
+                   {:Authorization
+                     (str \"Basic \" (base64/encode \"username:password\"))}"
+  [url & [{:skip-endings skip-endings :extra-headers extra-headers}]]
+  (let [sitemap (download-cached url)
+        locs (parse-xml-loc-tags sitemap)
+        urls (for [loc :in locs :reduce [acc []]]
+               (cond
+                 ;; Skip irrelevant url endings like image files or useless sitemaps
+                 (some? |(str/ends-with? loc $) skip-endings) acc
+                 ;; Process child maps recursively
+                 (str/ends-with? loc ".xml") (concat acc (load loc {:skip-endings skip-endings}))
+                 (push acc loc)))]
+    (println "Included" (str/pad-right (count urls) 3) "urls from" url)
+    urls))
+
+(comment
+  (def res (load "https://example.com/sitemap.xml" {:skip-endings [".jpg" ".png"]}))
+
+  (count res)
+  )
+
+
+(comment
+  ;; Implementation reading all downloaded sitemaps from a local folder
+
+  (defn parse-xml-loc-tags [xml-path]
+    (let [dom (doto (php/new DOMDocument)
+                (php/-> (load xml-path)))  ;; Read
+          loc-nodes (php/-> dom (getElementsByTagName "loc"))]
+      (map |(php/-> $ nodeValue) loc-nodes)))
+
+  (def sitemap-files (php->phel (php/glob "./sitemaps/*")))
+
+  (defn parse-sitemaps [files]
+    (for [file :in files :let [locs (parse-xml-loc-tags file)] :reduce [acc []]]
+      (concat acc locs)))
+  )
