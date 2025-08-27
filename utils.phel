@@ -11,3 +11,79 @@
 
 (defn methods [obj]
   (println (php/get_class_methods obj)))
+
+
+# Attempt to fix some surprising PHP behavior inconsistent with Java (Clojure),
+# for some basic use cases only.
+
+(defn parse-float
+  "Converts to float without doing odd type conversions, acting more like
+  Float/parseFloat in Clojure."
+  [x]
+  (when-not (php/is_numeric x)
+    (throw (php/new \InvalidArgumentException
+                    (str "Invalid value for parse-float (" x ")"))))
+  (php/floatval x))
+
+(defn parse-int
+  "Converts to float without doing odd type conversions, acting more like
+  Integer/parseInt in Clojure."
+  [x]
+  (when-not (php/is_numeric x)
+    (throw (php/new \InvalidArgumentException
+                    (str "Invalid value for parse-int (" x ")"))))
+  (when (and (= :string (type x))
+             (> (php/bccomp x (php/strval php/PHP_INT_MAX)) 0))
+    (throw (php/new \InvalidArgumentException
+                    (str "Value exceeds maximum 64-bit integer (" x ")"))))
+  (php/intval x))
+
+
+## Tests
+
+(deftest parse-float
+  (is (= 1.1 (parse-float 1.1)))
+  (is (= 1.0 (parse-float 1)))
+  (is (= 1.1 (parse-float "1.1")))
+  (is (= -1.1 (parse-float "-1.1")))
+  (is (= 0.0 (parse-float 0)))
+  (is (= 0.0 (parse-float "0")))
+  (is (= 1.0E-10 (parse-float 1.0E-10)))
+  (is (= 1.0E-10 (parse-float "1.0E-10")))
+  (is (= 1.0E10 (parse-float 1.0E10)))
+  (is (= 1.0E10 (parse-float "1.0E10")))
+  (is (thrown? \InvalidArgumentException (parse-float "")))
+  (is (thrown? \InvalidArgumentException (parse-float true)))
+  (is (thrown? \InvalidArgumentException (parse-float false)))
+  (is (thrown? \InvalidArgumentException (parse-float "abc")))
+  (is (thrown? \InvalidArgumentException (parse-float "1.1.1")))
+  (is (thrown? \InvalidArgumentException (parse-float [])))
+  (is (thrown? \InvalidArgumentException (parse-float {})))
+  (is (thrown? \InvalidArgumentException (parse-float nil))))
+
+(deftest parse-int
+  (is (= 1 (parse-int 1)))
+  (is (false? (= 1.0 (parse-int 1))) "not equivalent to same float number")
+
+  (is (= 0 (parse-int 0)))
+  (is (= 0 (parse-int "0")))
+
+  (is (= 9223372036854775807 (parse-int "9223372036854775807"))
+      "maximum 64bit value")
+
+  (is (thrown? \InvalidArgumentException (parse-int "")))
+  (is (thrown? \InvalidArgumentException (parse-int true)))
+  (is (thrown? \InvalidArgumentException (parse-int false)))
+  (is (thrown? \InvalidArgumentException (parse-int "abc")))
+  (is (thrown? \InvalidArgumentException (parse-int "1.1.1")))
+  (is (thrown? \InvalidArgumentException (parse-int [])))
+  (is (thrown? \InvalidArgumentException (parse-int {})))
+  (is (thrown? \InvalidArgumentException (parse-int nil)))
+  (is (thrown? \InvalidArgumentException (parse-int "9223372036854775808"))
+      "over 64 bit number should throw instead of returning maximum value")
+
+  (is (= 10000000000 (parse-int 1.0E10)))
+  # fails because of bccomp (used for checking out of bounds integer (64bit):
+  (is (thrown? \ValueError (parse-int "1.0E-10")))
+  (is (thrown? \ValueError (parse-int "1.0E10")))
+  )
