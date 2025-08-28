@@ -14,7 +14,11 @@
     []
   (if (= "vendor/bin/phel" (php/aget (php/aget php/$GLOBALS "_SERVER") "PHP_SELF")) true false))
 
-## Initialize WordPress plugin environment for REPL / tests
+## Initialize WordPress plugin environment for REPL / tests when ns is required
+
+### Requires "WP_LOAD_DIR" environment variable pointing to dir with wp-load.php
+### or that Phel project is in standard WP plugin directory with wp-load.php 3
+### levels higher. Comment following 2 forms to disable the behavior.
 
 (defn resolve-wp-load-path
   "Resolves wp-load.php either based on environment variable WP_LOAD_DIR or
