@@ -1,0 +1,53 @@
+(ns js/next-pdo
+  (:require phel\pdo))
+
+;; PDO convenience functions inspired from seancorfield/next-jdbc
+;; Separated from wp.phel for standalone use
+;; TODO https://github.com/phel-lang/phel-pdo/issues/4
+
+(defn fetch-all [conn sql]
+  (let [query (pdo/query conn sql)]
+    (statement/fetch-all query)))
+
+;; https://github.com/seancorfield/next-jdbc/blob/56bd2356ac542ff6c3667aec24cb0207dafe4e40/src/next/jdbc/sql.clj#L178
+;; TODO allow passing optional id col as with next-jdbc (?)
+(defn get-by-id [conn table id]
+    (-> (pdo/prepare conn (str "SELECT * FROM " table " WHERE id = :id"))
+        (statement/bind-value :id id)
+        (statement/execute)
+        (statement/fetch)))
+
+;; TODO improve after next.jdbc,
+;; - return map of generated keys (?)
+;; - split into execute-one! (?)
+(defn insert! "returns new id"
+    [conn table m]
+    (let [m-keys (keys m)
+          column-names (str/join ", " (map name m-keys))
+          placeholders (str/join ", " m-keys)
+          stmt-sql (str "INSERT INTO " table " (" column-names ") "
+                        "VALUES (" placeholders ")")
+          stmt (pdo/prepare conn stmt-sql)]
+
+      (dofor [[k v] :pairs m]
+             (statement/bind-value stmt k v))
+
+      (php/-> (stmt :stmt) (execute))
+      (pdo/last-insert-id conn)))
+
+(defn update!
+  [conn table row-id m]
+  (let [assignments
+        (str/join ", " (map (fn [k] (str (name k) " = " k)) (keys m)))
+
+        stmt-sql (str "UPDATE " table " "
+                      "SET " assignments " "
+                      "WHERE id = :id")
+        stmt (pdo/prepare conn stmt-sql)]
+
+    (statement/bind-value stmt :id row-id)
+    (dofor [[k v] :pairs m]
+           (statement/bind-value stmt k v))
+
+    (php/-> (stmt :stmt) (execute))
+    (php/-> (stmt :stmt) (rowCount))))

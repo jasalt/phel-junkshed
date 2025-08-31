@@ -1,6 +1,7 @@
 (ns js\wp
   (:require phel\str)
   (:require phel\pdo)
+  (:require js\next-pdo)
   (:require phel\pdo\statement))
 
 ### General Phel functions for various WP / PHP API's.
@@ -152,54 +153,12 @@
     conn))
 
 ## PDO convenience functions inspired from seancorfield/next-jdbc
-## TODO https://github.com/phel-lang/phel-pdo/issues/4
+## TODO moved to next-pdo.phel, kept here for now for compatibility.
 
-(defn pdo-fetch-all [conn sql]
-  (let [query (pdo/query conn sql)]
-    (statement/fetch-all query)))
-
-## https://github.com/seancorfield/next-jdbc/blob/56bd2356ac542ff6c3667aec24cb0207dafe4e40/src/next/jdbc/sql.clj#L178
-## TODO allow passing optional id col as with next-jdbc (?)
-(defn pdo-get-by-id [conn table id]
-    (-> (pdo/prepare conn (str "SELECT * FROM " table " WHERE id = :id"))
-        (statement/bind-value :id id)
-        (statement/execute)
-        (statement/fetch)))
-
-## TODO improve after next.jdbc,
-## - return map of generated keys (?)
-## - split into execute-one! (?)
-(defn pdo-insert! "returns new id"
-    [conn table m]
-    (let [m-keys (keys m)
-          column-names (str/join ", " (map name m-keys))
-          placeholders (str/join ", " m-keys)
-          stmt-sql (str "INSERT INTO " table " (" column-names ") "
-                        "VALUES (" placeholders ")")
-          stmt (pdo/prepare conn stmt-sql)]
-
-      (dofor [[k v] :pairs m]
-             (statement/bind-value stmt k v))
-
-      (php/-> (stmt :stmt) (execute))
-      (pdo/last-insert-id conn)))
-
-(defn pdo-update!
-  [conn table row-id m]
-  (let [assignments
-        (str/join ", " (map (fn [k] (str (name k) " = " k)) (keys m)))
-
-        stmt-sql (str "UPDATE " table " "
-                      "SET " assignments " "
-                      "WHERE id = :id")
-        stmt (pdo/prepare conn stmt-sql)]
-
-    (statement/bind-value stmt :id row-id)
-    (dofor [[k v] :pairs m]
-           (statement/bind-value stmt k v))
-
-    (php/-> (stmt :stmt) (execute))
-    (php/-> (stmt :stmt) (rowCount))))
+(def pdo-fetch-all next-pdo/pdo-fetch-all)
+(def pdo-get-by-id next-pdo/get-by-id)
+(def pdo-insert! next-pdo/insert!)
+(def pdo-update! next-pdo/update!)
 
 ### Routing functions
 
