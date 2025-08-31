@@ -1,10 +1,9 @@
-(ns js/next-pdo
+(ns js\next-pdo
   (:require phel\str)
   (:require phel\trace :refer [dbg])
   (:require phel\pdo)
   (:require phel\pdo\statement)
-  (:use PDO)
-  )
+  (:use PDO))
 
 ;; PDO convenience functions separated from wp.phel for standalone use.
 ;; Partially inspired from seancorfield/next-jdbc, hence the name.
