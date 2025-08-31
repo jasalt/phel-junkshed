@@ -71,3 +71,15 @@
 
     (php/-> (stmt :stmt) (execute))
     (php/-> (stmt :stmt) (rowCount))))
+
+
+(comment
+
+  (def sqlite-conn (pdo/connect "sqlite:database.db"))
+
+
+  ;; Requires PHP Sqlite3 extension included in sury.org debian packages
+  ;; php8.3-sqlite3 php8.4-sqlite3
+  ;; see https://wiki.debian.org/AdditionalPHPVersions
+
+  )
