@@ -1,8 +1,9 @@
 (ns js/next-pdo
   (:require phel\pdo))
 
-;; PDO convenience functions inspired from seancorfield/next-jdbc
-;; Separated from wp.phel for standalone use
+;; PDO convenience functions inspired from seancorfield/next-jdbc, hence the name.
+;; Separated from wp.phel for standalone use.
+;; TODO submit good parts to phel-lang/phel-pdo
 ;; TODO https://github.com/phel-lang/phel-pdo/issues/4
 
 (defn fetch-all [conn sql]
