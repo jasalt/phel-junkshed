@@ -3,6 +3,7 @@
   (:require phel\trace :refer [dbg])
   (:require phel\pdo)
   (:require phel\pdo\statement)
+  (:use PDO)
   )
 
 ;; PDO convenience functions separated from wp.phel for standalone use.
@@ -15,8 +16,18 @@
 ;; TODO https://github.com/phel-lang/phel-pdo/issues/4
 
 ;;;; misc
+
+(defn get-driver
+  "Returns database driver used for the PDO connection"
+  [conn]
+  {:pre [(pdo/connection? conn)]}
+  (php/-> (:pdo conn) (getAttribute (php/:: PDO ATTR_DRIVER_NAME))))
+
 (defn table-exists? [conn table-name]
   {:pre [(pdo/connection? conn) (string? table-name)]}
+  (when-not (= "sqlite" (get-driver conn))
+    (throw (php/new \InvalidArgumentException "Only SQLite supported for now")))
+
   (let [stmt (pdo/prepare conn "SELECT * FROM sqlite_master WHERE type='table' AND name = ?")
         tables (-> stmt
                   (statement/execute [table-name])
@@ -25,6 +36,9 @@
 
 (defn drop-table! [conn table-name]
   {:pre [(pdo/connection? conn) (string? table-name)]}
+  (when-not (= "sqlite" (get-driver conn))
+    (throw (php/new \InvalidArgumentException "Only SQLite supported for now")))
+
   (let [sql (str "DROP TABLE IF EXISTS `" table-name "`")]
     (pdo/exec conn sql)))
 
@@ -79,9 +93,11 @@
 
 
 (comment
+  (get-driver sqlite-conn)
   (drop-table! sqlite-conn "t1")
   (table-exists? sqlite-conn "t1")
   (table-exists? sqlite-conn "foo")
+  (:pdo sqlite-conn)
 
   (table-exists? sqlite-conn "t1")
   (table-exists? sqlite-conn "t3")
