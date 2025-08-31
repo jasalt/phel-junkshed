@@ -1,5 +1,6 @@
 (ns js/next-pdo
   (:require phel\str)
+  (:require phel\trace :refer [dbg])
   (:require phel\pdo)
   (:require phel\pdo\statement)
   )
@@ -15,13 +16,15 @@
 
 ;;;; misc
 (defn table-exists? [conn table-name]
-  #_(when (php/-> wpdb (get_var (str "SHOW TABLES LIKE '" table-name "';"))) true)
-  )
+  {:pre [(pdo/connection? conn) (string? table-name)]}
+  (let [stmt (pdo/prepare conn "SELECT * FROM sqlite_master WHERE type='table' AND name = ?")
+        tables (-> stmt
+                  (statement/execute [table-name])
+                  (statement/fetch-all))]
+    (not (empty? tables))))
 
 (defn drop-table! [conn table-name]
   #_(php/-> wpdb (query (str "DROP TABLE IF EXISTS " table-name))))
-
-(defn create-table! [conn table-sql])
 
 ;;;; next-jdbc
 
@@ -74,12 +77,33 @@
 
 
 (comment
+  (table-exists? sqlite-conn "t1")
+  (table-exists? sqlite-conn "foo")
 
+  (table-exists? sqlite-conn "t1")
+  (table-exists? sqlite-conn "t3")
+
+  (pdo/exec sqlite-conn "CREATE table t1 (id integer primary key autoincrement, name varchr(10))")
+  (statement/fetch (pdo/query sqlite-conn "SELECT * FROM sqlite_master WHERE type='table' AND name = 't1'"))
+  (statement/fetch (pdo/query sqlite-conn "SELECT * FROM sqlite_master WHERE type='table' AND name = 't1'"))
+
+
+
+  (create-table! sqlite-conn )
+  (table-exists? sqlite-conn "foo")
   (def sqlite-conn (pdo/connect "sqlite:database.db"))
 
 
-  ;; Requires PHP Sqlite3 extension included in sury.org debian packages
+
+
+  ;; Requires PHP Sqlite3 extension included in sury.org Debian packages
   ;; php8.3-sqlite3 php8.4-sqlite3
   ;; see https://wiki.debian.org/AdditionalPHPVersions
 
   )
+
+(comment
+  ;; TODO Tests
+  (is (thrown? \AssertionError (table-exists? sqlite-conn nil)))
+  (is (thrown? \AssertionError (table-exists? nil nil)))
+ )
