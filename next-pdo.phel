@@ -1,10 +1,29 @@
 (ns js/next-pdo
-  (:require phel\pdo))
+  (:require phel\str)
+  (:require phel\pdo)
+  (:require phel\pdo\statement)
+  )
 
-;; PDO convenience functions inspired from seancorfield/next-jdbc, hence the name.
-;; Separated from wp.phel for standalone use.
+;; PDO convenience functions separated from wp.phel for standalone use.
+;; Partially inspired from seancorfield/next-jdbc, hence the name.
+
+;; Requires phel-lang/phel-pdo
+;; https://github.com/phel-lang/phel-pdo
+
 ;; TODO submit good parts to phel-lang/phel-pdo
 ;; TODO https://github.com/phel-lang/phel-pdo/issues/4
+
+;;;; misc
+(defn table-exists? [conn table-name]
+  #_(when (php/-> wpdb (get_var (str "SHOW TABLES LIKE '" table-name "';"))) true)
+  )
+
+(defn drop-table! [conn table-name]
+  #_(php/-> wpdb (query (str "DROP TABLE IF EXISTS " table-name))))
+
+(defn create-table! [conn table-sql])
+
+;;;; next-jdbc
 
 (defn fetch-all [conn sql]
   (let [query (pdo/query conn sql)]

@@ -7,6 +7,9 @@
 ### General Phel functions for various WP / PHP API's.
 ### See also Phel WP Plugin Skeleton project.
 
+### Requires phel-lang/phel-pdo
+### https://github.com/phel-lang/phel-pdo
+
 (defn web-request? []
   (if (php/aget (php/aget php/$GLOBALS "_SERVER") "HTTP_HOST") true false))
 
