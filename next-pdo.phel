@@ -24,7 +24,9 @@
     (not (empty? tables))))
 
 (defn drop-table! [conn table-name]
-  #_(php/-> wpdb (query (str "DROP TABLE IF EXISTS " table-name))))
+  {:pre [(pdo/connection? conn) (string? table-name)]}
+  (let [sql (str "DROP TABLE IF EXISTS `" table-name "`")]
+    (pdo/exec conn sql)))
 
 ;;;; next-jdbc
 
@@ -77,6 +79,7 @@
 
 
 (comment
+  (drop-table! sqlite-conn "t1")
   (table-exists? sqlite-conn "t1")
   (table-exists? sqlite-conn "foo")
 
