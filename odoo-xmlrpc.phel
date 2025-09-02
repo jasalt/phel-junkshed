@@ -12,6 +12,9 @@
 ## - https://www.odoo.com/documentation/18.0/developer/reference/external_api.html
 ## - https://www.odoo.com/documentation/18.0/developer/reference/backend/orm.html
 
+## TODO Refactor with latest Phel features (written with Phel from 2024)
+## - Use phel->php for nested conversions written too verbose currently
+
 (defn odoo-rpc-connection?
   "Validate odoo-rpc-connection map as if it was a struct (providing validation fn).
   TODO redefining struct (in REPL) leads to error, how to avoid running on reload?
