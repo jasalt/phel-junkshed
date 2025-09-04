@@ -2,8 +2,8 @@
   (:require js\http-client :as http)
   (:require phel\trace :refer [dbg]))
 
-;;;; Phel wrapper for Scraping Robot API / scrapingrobot.com (WIP / not tested)
-;; Add SCRAPING_ROBOT_TOKEN environment variable before use
+;;;; Phel wrapper for Scraping Robot HTTP API / scrapingrobot.com
+;; Set SCRAPING_ROBOT_TOKEN environment variable before use
 
 (def token (php/getenv "SCRAPING_ROBOT_TOKEN"))
 (def api-base "https://api.scrapingrobot.com")
@@ -51,9 +51,11 @@
 
 (comment
   (def html (get-html "https://www.example.com"))
-  (php/strlen html)
+  ;; url => https://www.example.com
+  ;; POST https://api.scrapingrobot.com/?token=<your-token-here>
+  ;; Received 1256 bytes of HTML
 
   (get-stats "monthly")  ; => {"August-2025" 0.7632 "July-2025" 1.0566 "June-2025" ...}
-  (get-balance) ; 0.90
+  (get-balance) ; => 8.9
 
   )
