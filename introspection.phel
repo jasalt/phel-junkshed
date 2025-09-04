@@ -1,0 +1,47 @@
+(ns js\introspection)
+
+;; Phel / PHP environment introspection utils
+
+(defn printr [obj]
+  (php/print_r obj))
+
+(defn dd
+  "Dump and die."
+  [x]
+  (println x)(php/die))
+
+(defn read-php-obj-prop "Read private PHP object property" [obj prop]
+  (let [r (php/new \ReflectionObject obj)
+        p (php/-> r (getProperty prop))]
+    (php/-> p (setAccessible true))
+    (php/-> p (getValue obj))))
+
+(defn- php-func-args "Get function arguments for a php function
+  Usage: (php-func-args \"array_merge\")
+  ; => [{:name "arrays" :type array}]"
+  [fname]
+  (->>
+   (php/-> (php/new \ReflectionFunction fname) (getParameters))
+   (map (fn [param] {:name (php/-> param (getName))
+                     :type (php/-> param (getType))}))))
+
+(defn methods [obj]
+  (println (php/get_class_methods obj)))
+
+(defn show-user-defined
+  "List 'user' definitions e.g. to see which \Amp functions are available.
+   https://github.com/amphp/amp/blob/7cf7fef3d667bfe4b2560bc87e67d5387a7bcde9/src/functions.php"
+  []
+  (php/aget (php/get_defined_functions) "user"))
+
+(defn get-ns-file
+  "Resolves source file for the namespace in not too reliable manner.
+  Does not work in REPL.
+  Usage: (println (get-ns-file *ns*))"
+  [ns-name]
+  (let [ns-name-demunged (str/replace ns-name "_" "-")
+        rf (php/new \Phel\Run\RunFacade)
+        loaded-namespaces (php/-> rf (getLoadedNamespaces))]
+    (for [ns-information :in loaded-namespaces
+          :when (= ns-name-demunged (php/-> ns-information (getNamespace)))]
+      (php/-> ns-information (getFile)))))
