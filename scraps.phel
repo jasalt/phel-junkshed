@@ -1,0 +1,16 @@
+(ns js\scraps
+  (:require phel\str))
+
+;; Miscallaneous stuff
+
+(defn get-ns-file
+  "Resolves source file for the namespace in not too reliable manner.
+  Does not work in REPL.
+  Usage: (println (get-ns-file *ns*))"
+  [ns-name]
+  (let [ns-name-demunged (str/replace ns-name "_" "-")
+        rf (php/new \Phel\Run\RunFacade)
+        loaded-namespaces (php/-> rf (getLoadedNamespaces))]
+    (for [ns-information :in loaded-namespaces
+          :when (= ns-name-demunged (php/-> ns-information (getNamespace)))]
+      (php/-> ns-information (getFile)))))
