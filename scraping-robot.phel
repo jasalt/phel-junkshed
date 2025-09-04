@@ -26,7 +26,7 @@
 (defn get-html
   "Get url and return html.
   With `cached` non nil serves previous cached result from fs."
-  [url & [cached]]
+  [url]
   (dbg url)
   (let [response
         (http/post
