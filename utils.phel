@@ -2,32 +2,20 @@
 
 ## Various utility functions
 
-## Phel / PHP environment introspection
+(defn partialr [f & args1]
+  "partial right"
+  (fn [& args2]
+    (apply f (concat args2 args1))))
 
-(defn printr [obj]
-  (php/print_r obj))
-
-(defn methods [obj]
-  (println (php/get_class_methods obj)))
-
-(defn show-user-defined
-  "List 'user' definitions e.g. to see which \Amp functions are available.
-   https://github.com/amphp/amp/blob/7cf7fef3d667bfe4b2560bc87e67d5387a7bcde9/src/functions.php"
-  []
-  (php/aget (php/get_defined_functions) "user"))
+(defn m->header [m]
+  (for [[k v] :pairs m]
+    (str (name k) ": " v)))
 
 (defn callable->closure
   "Converts callable such as Phel\Lang\AbstractFn into a closure that is often
   expected by AMPHP and some other PHP libraries."
   [phel-fn]
   (php/:: \Closure (fromCallable phel-fn)))
-
-
-## Misc
-
-(defn m->header [m]
-  (for [[k v] :pairs m]
-    (str (name k) ": " v)))
 
 
 # Attempt to fix some surprising PHP behavior inconsistent with Java (Clojure),
