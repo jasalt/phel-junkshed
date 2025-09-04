@@ -1,0 +1,59 @@
+(ns js\scraping-robot
+  (:require js\http-client :as http)
+  (:require phel\trace :refer [dbg]))
+
+;;;; Phel wrapper for Scraping Robot API / scrapingrobot.com (WIP / not tested)
+;; Add SCRAPING_ROBOT_TOKEN environment variable before use
+
+(def token (php/getenv "SCRAPING_ROBOT_TOKEN"))
+(def api-base "https://api.scrapingrobot.com")
+
+;; https://scrapingrobot.readme.io/reference/get-credit-balance
+(defn get-balance []
+  (-> (http/post (str api-base "/balance?token=" token)
+                 {:headers {:Accept "application/json"}})
+      :body http/json-decode (get-in ["result"]) php/floatval))
+
+;; https://scrapingrobot.readme.io/reference/get-credit-usage-statistics
+(defn get-stats
+  "Return parsed stats for given type: daily (default), weekly, monthly"
+  [& [type]]
+  (-> (http/post (str api-base "/stats?type=" (or type "daily") "&token=" token)
+                 {:headers {:Accept "application/json"}})
+      :body http/json-decode (get-in ["result"])))
+
+;; https://scrapingrobot.readme.io/reference/post_
+(defn get-html
+  "Get url and return html.
+  With `cached` non nil serves previous cached result from fs."
+  [url & [cached]]
+  (dbg url)
+  (let [response
+        (http/post
+           (str api-base "/?token=" token)
+           {:accept "application/json"
+            :body (http/json-encode {:url url ; TODO proxyCountry fail
+                                     :module "HtmlRequestScraper"
+                                     :params {:proxyCountry "FI"}})})
+        response-json (-> response :body http/json-decode)
+        html (get response-json "result")]
+    (when-not html
+      ;; (spit (str (php/date "ymd-Hm_") "get-html-failed-response-json") response-json)  ; Uncomment for debugging
+      (throw (php/new \RuntimeException
+                      "Couldn't receive readable HTML from Scraping Robot")))
+
+    (println "Received" (php/strlen html) "bytes of HTML")
+    ;; (spit (str (php/date "ymd-Hm_") "request-html.html") html)  ; Uncomment for debugging
+    ;; (println "Saved to" debug-dir "for diagnostics")
+    html
+    )
+  )
+
+(comment
+  (def html (get-html "https://www.example.com"))
+  (php/strlen html)
+
+  (get-stats "monthly")  ; => {"August-2025" 0.7632 "July-2025" 1.0566 "June-2025" ...}
+  (get-balance) ; 0.90
+
+  )
