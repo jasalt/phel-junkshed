@@ -2,15 +2,20 @@
 
 ## Various utility functions
 
+(defn partialr [f & args1]
+  "partial right"
+  (fn [& args2]
+    (apply f (concat args2 args1))))
+
 (defn m->header [m]
   (for [[k v] :pairs m]
     (str (name k) ": " v)))
 
-(defn printr [obj]
-  (php/print_r obj))
-
-(defn methods [obj]
-  (println (php/get_class_methods obj)))
+(defn callable->closure
+  "Converts callable such as Phel\Lang\AbstractFn into a closure that is often
+  expected by AMPHP and some other PHP libraries."
+  [phel-fn]
+  (php/:: \Closure (fromCallable phel-fn)))
 
 
 # Attempt to fix some surprising PHP behavior inconsistent with Java (Clojure),
