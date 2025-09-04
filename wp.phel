@@ -158,7 +158,7 @@
 ## PDO convenience functions inspired from seancorfield/next-jdbc
 ## TODO moved to next-pdo.phel, kept here for now for compatibility.
 
-(def pdo-fetch-all next-pdo/pdo-fetch-all)
+(def pdo-fetch-all next-pdo/fetch-all)
 (def pdo-get-by-id next-pdo/get-by-id)
 (def pdo-insert! next-pdo/insert!)
 (def pdo-update! next-pdo/update!)
