@@ -1,0 +1,34 @@
+(ns js\api\hasdata
+  (:require seo-tools\http-client :as http)
+  (:require phel\trace :refer [dbg]))
+
+(def apikey (php/getenv "HASDATA_APIKEY"))
+
+(def query "functional lisp")
+
+(def search-url
+  (str "https://api.hasdata.com/scrape/google-light/serp?location=Helsinki%2CUusimaa%2CFinland&domain=google.fi&gl=fi&hl=fi&filter=0&num=100&q=" (php/urlencode query)))
+
+(def result (http/get
+             search-url
+             {:accept "application/json"
+              :headers {:Content-Type "application/json"
+                        :x-api-key apikey}}))
+(comment
+
+  (-> (:body result)
+      http/json-decode
+      (get "requestMetadata"))
+
+
+  (-> (:body result)
+      http/json-decode
+      (get "relatedSearches"))
+
+
+  (-> (:body result)
+      http/json-decode
+      (get "organicResults")
+      first)
+
+  )
