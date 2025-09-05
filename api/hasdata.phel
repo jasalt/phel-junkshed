@@ -1,11 +1,15 @@
 (ns js\api\hasdata
-  (:require seo-tools\http-client :as http)
+  (:require js\http-client :as http)
   (:require phel\trace :refer [dbg]))
+
+;;;; Phel wrapper for Hasdata API https://hasdata.com/
+;; Set HASDATA_APIKEY environment variable before use
 
 (def apikey (php/getenv "HASDATA_APIKEY"))
 
 (def query "functional lisp")
 
+;; https://app.hasdata.com/apis/25 ("Google SERP Light API")
 (def search-url
   (str "https://api.hasdata.com/scrape/google-light/serp?location=Helsinki%2CUusimaa%2CFinland&domain=google.fi&gl=fi&hl=fi&filter=0&num=100&q=" (php/urlencode query)))
 
@@ -20,15 +24,28 @@
       http/json-decode
       (get "requestMetadata"))
 
+  ;; {"id" "8a761c36-f148-4dae-b17b-1170be9e2f01" "status" "ok" "html" "https://f005.backblazeb2.com/file/hasdata-screenshots/8a761c36-f148-4dae-b17b-1170be9e2f01.html" "url" "https://www.google.fi/search?q=functional+lisp&uule=w+CAIQICIYSGVsc2lua2ksVXVzaW1hYSxGaW5sYW5k&hl=fi&gl=fi&num=100&filter=0&sourceid=chrome&ie=UTF-8"}
+
 
   (-> (:body result)
       http/json-decode
       (get "relatedSearches"))
+
+  ;; [{"query" "functional programming languages" "link" "https://www.google.fi/search?num=100&sca_esv=83d0c91f956a6f84&hl=fi&gl=fi&ie=UTF-8&q=functional+programming+languages&sa=X&ved=2ahUKEwif_omalcGPAxWZFlkFHR6JO3UQ1QJ6BAgIEAE"} {"query" "Lisp speech" "link" "https://www.google.fi/search?num=100&sca_esv=83d0c91f956a6f84&hl=fi&gl=fi&ie=UTF-8&q=Lisp+speech&sa=X&ved=2ahUKEwif_omalcGPAxWZFlkFHR6JO3UQ1QJ6BAgIEAI"} {"query" "Lisp programming" "link" "https://www.google.fi/search?num=100&sca_esv=83d0c91f956a6f84&hl=fi&gl=fi&ie=UTF-8&q=Lisp+programming&sa=X&ved=2ahUKEwif_omalcGPAxWZFlkFHR6JO3UQ1QJ6BAgIEAM"} {"query" "haskell" "link" "https://www.google.fi/search?num=100&sca_esv=83d0c91f956a6f84&hl=fi&gl=fi&ie=UTF-8&q=haskell&sa=X&ved=2ahUKEwif_omalcGPAxWZFlkFHR6JO3UQ1QJ6BAgIEAQ"} {"query" "Lisp tutorial" "link" "https://www.google.fi/search?num=100&sca_esv=83d0c91f956a6f84&hl=fi&gl=fi&ie=UTF-8&q=Lisp+tutorial&sa=X&ved=2ahUKEwif_omalcGPAxWZFlkFHR6JO3UQ1QJ6BAgIEAU"}]
 
 
   (-> (:body result)
       http/json-decode
       (get "organicResults")
       first)
+
+  ;; {"position" 1 "title" "Is Lisp Functional? : r/functionalprogramming - Reddit" "link" "https://www.reddit.com/r/functionalprogramming/comments/1kap2tu/is_lisp_functional/" "displayedLink" "www.reddit.com › functionalprogramming › comments" "date" "30.4.2025" "snippet" "\"Functional programming\" used to just mean functions were first-class, so of course this includes Lisp. Lisp has been called a functional ..."}
+
+  (-> (:body result)
+      http/json-decode
+      (get "organicResults")
+      last)
+
+  ;; {"position" 99 "title" "1,000+ R Words, Phrases, Sentences, & Paragraphs by Place ..." "link" "https://www.home-speech-home.com/r-words.html" "displayedLink" "www.home-speech-home.com › r-words" "snippet" "R words, phrases, sentences, and reading passages for targeted speech therapy practice."}
 
   )
