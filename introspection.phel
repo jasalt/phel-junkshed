@@ -8,7 +8,7 @@
   "Get min-arity for a defined function from it's metadata in Phel registry.
   Does not support anonymous functions.
   Example:
-  (def fun (fn [a b] (str a b)))
+  (def fun (fn [a b]))
   (get-def-min-arity 'fun *ns*) ; => 2"
   [fn-symbol namespace]
   (let [meta-data (php/:: \Phel (getDefinitionMetaData namespace (php/-> fn-symbol (getName))))]
@@ -17,11 +17,34 @@
       nil)))
 
 (defn get-min-arity
-  "Get function object's minimum arity, supporting anonymous functions."
+  "Get function object's minimum arity.
+  Example:
+  (get-min-arity (fn [a b & c])) ; => 2"
   [fn-obj]
   (let [fn-closure (utils/callable->closure fn-obj)
         reflection (php/new \ReflectionFunction fn-closure)]
     (php/-> reflection (getNumberOfRequiredParameters))))
+
+;; Execution time seems similar for both on single invocation, using Reflection
+;; class seems generally more convenient.
+
+(defn get-arity
+  "Get function object's arity.
+  (get-arity (fn [a b & c])) ; => 3"
+  [fn-obj]
+  (let [fn-closure (utils/callable->closure fn-obj)
+        reflection (php/new \ReflectionFunction fn-closure)]
+    (php/-> reflection (getNumberOfParameters))))
+
+(defn variadic?
+  "Receives function object and returns true if it's of variable arity or false.
+  Example:
+  (variadic? (fn [a b & c])) ; => true
+  (variadic? (fn [a b]))     ; => false"
+  [fn-obj]
+  (let [fn-closure (utils/callable->closure fn-obj)
+        reflection (php/new \ReflectionFunction fn-closure)]
+    (php/-> reflection (isVariadic))))
 
 (defn read-php-obj-prop "Read private PHP object property" [obj prop]
   (let [r (php/new \ReflectionObject obj)
