@@ -1,14 +1,27 @@
-(ns js\introspection)
+(ns js\introspection
+  (:require js\utils)
+  )
 
 ;; Phel / PHP environment introspection utils
 
-(defn printr [obj]
-  (php/print_r obj))
+(defn get-def-min-arity
+  "Get min-arity for a defined function from it's metadata in Phel registry.
+  Does not support anonymous functions.
+  Example:
+  (def fun (fn [a b] (str a b)))
+  (get-def-min-arity 'fun *ns*) ; => 2"
+  [fn-symbol namespace]
+  (let [meta-data (php/:: \Phel (getDefinitionMetaData namespace (php/-> fn-symbol (getName))))]
+    (if meta-data
+      (php/-> meta-data (find "min-arity"))
+      nil)))
 
-(defn dd
-  "Dump and die."
-  [x]
-  (println x)(php/die))
+(defn get-min-arity
+  "Get function object's minimum arity, supporting anonymous functions."
+  [fn-obj]
+  (let [fn-closure (utils/callable->closure fn-obj)
+        reflection (php/new \ReflectionFunction fn-closure)]
+    (php/-> reflection (getNumberOfRequiredParameters))))
 
 (defn read-php-obj-prop "Read private PHP object property" [obj prop]
   (let [r (php/new \ReflectionObject obj)

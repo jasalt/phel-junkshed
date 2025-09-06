@@ -18,6 +18,16 @@
   (php/:: \Closure (fromCallable phel-fn)))
 
 
+## PHP function wrappers
+
+(defn printr [obj]
+  (php/print_r obj))
+
+(defn dd
+  "Dump and die."
+  [x]
+  (println x)(php/die))
+
 # Attempt to fix some surprising PHP behavior inconsistent with Java (Clojure),
 # for some basic use cases only.
 
