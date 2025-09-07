@@ -1,6 +1,8 @@
 (ns js\cli
   (:require phel\str)
-  (:require js\validate-opts :refer [validate-opts]))
+  (:require js\validate-opts :refer [validate-opts])
+  (:require js\introspection :refer [get-min-arity get-arity variadic?])
+  )
 
 ;; Phel utilities for command line interfaces
 ;; Loosely inspired by:
@@ -212,6 +214,28 @@
      {:empty ""})
   )
 
+(defn- verify-arity
+  "Validates the `param-count` for given function `f`."
+  [f param-count]
+  (let [min-arity (get-min-arity f)
+        arity (get-arity f)
+        variadic (variadic? f)]
+
+    ;; TODO Does not document that the flag arguments are passed as single opts
+    (when (< param-count min-arity)
+      (throw (php/new \InvalidArgumentException
+                      (str "Not enough parameters passed via CLI, required "
+                           min-arity (when variadic " or more for the function")))))
+
+    (when (and (> param-count arity) (not variadic))
+      (throw (php/new \InvalidArgumentException
+                      (str "Too many parameters passed via CLI, maximum "
+                           min-arity (when variadic " or more"))))
+      )
+    (println "Function min-arity:" min-arity "arity:" arity "variadic:" variadic)
+    )
+  )
+
 
 (defn- prepare-fn
   "Prepares given function applying parsed cli-args to it. One or more positional
@@ -225,8 +249,10 @@
     (println "the-params" the-params)
     (when opts-spec
       (println "Validating opts for spec" opts-spec)
-      (validate-opts opts-spec flags-map)
-      )
+      (validate-opts opts-spec flags-map))
+
+    (verify-arity f (count the-params))
+
     (fn [] (apply f the-params))))
 
 (defn resolve-command
@@ -322,4 +348,40 @@
         ]
     (= 5 (the-applied-fn))
     )
+
+
+
+  (function?
+   (resolve-command
+    {:fun
+     {:two-arity (fn [a b] (println "got: " a b))
+
+      }
+     }
+    ["fun" "two-arity" "one" "two"]))
+
+  ;; Throws
+  (resolve-command
+    {:fun
+     {:two-arity (fn [a b] (println "got: " a b))
+
+      }
+     }
+    ["fun" "two-arity" "one"])
+
+  (resolve-command
+    {:fun
+     {:two-arity (fn [a b] (println "got: " a b))
+
+      }
+     }
+    ["fun" "two-arity"])
+
+  (resolve-command
+    {:fun
+     {:two-arity (fn [a b] (println "got: " a b))
+
+      }
+     }
+    ["fun" "two-arity" "one" "two" "three"])
 )
