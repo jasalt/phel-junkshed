@@ -212,8 +212,10 @@
   )
 
 
-(defn- prepare-fn-with-params
-  "Prepares given function applying cli-args to it"
+(defn- prepare-fn
+  "Prepares given function applying parsed cli-args to it. One or more positional
+  args can be passed before flag arguments, flag arguments are collected into a
+  map as the last argument."
   [f cli-args]
   (let [[positional flags] (split-with |(not (str/starts-with? $ "-")) cli-args)
         flags-map (parse-flag-args (str/join " " flags))
@@ -241,11 +243,11 @@
         (cond
           ;; Check for a nested map with :handler function
           lookup-function
-          (prepare-fn-with-params lookup-function (rest args))
+          (prepare-fn lookup-function (rest args))
 
           ;; Check for a plain function
           (function? lookup-value)
-          (prepare-fn-with-params lookup-value (rest args))
+          (prepare-fn lookup-value (rest args))
 
           ;; Match not found yet, traverse further
           (hash-map? lookup-value) (recur (rest args) lookup))))))
