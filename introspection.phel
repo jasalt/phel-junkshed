@@ -52,9 +52,10 @@
     (php/-> p (setAccessible true))
     (php/-> p (getValue obj))))
 
-(defn- php-func-args "Get function arguments for a php function
+(defn- php-func-args
+  "Get function arguments for a php function
   Usage: (php-func-args \"array_merge\")
-  ; => [{:name "arrays" :type array}]"
+  ; => [{:name \"arrays\" :type array}]"
   [fname]
   (->>
    (php/-> (php/new \ReflectionFunction fname) (getParameters))
