@@ -251,7 +251,7 @@
   (function? (resolve-command
               {:tables {:create (fn [] 1)
                         :drop   (fn [] 2)}}
-              ["tables" "create" "bar" "foo=1"]))
+              ["tables" "create" "bar" "foo=1"]))  ; TODO should give \InvalidArgumentException for incorrect arity or check for spec
 
   (function? (resolve-command
               {:tables {:create {:handler (fn [] 1)}
