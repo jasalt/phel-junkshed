@@ -223,8 +223,8 @@
   "Resolve command function from commands map and return it with rest of args
   applied as function parameters. Supports function defined directly in map or
   as nested map with :handler"
-  [commands args]
-  (loop [args args
+  [commands cli-args]
+  (loop [args cli-args
          matched-command []]
     (when-not (empty? args)
       (let [lookup (push matched-command
