@@ -207,3 +207,90 @@
   (= (parse-flag-args "--empty=\"\"")  ; => {:empty true}
      {:empty ""})
   )
+
+
+(defn- prepare-fn-with-params
+  "Prepares given function applying cli-args to it"
+  [f cli-args]
+  (let [[positional flags] (split-with |(not (str/starts-with? $ "-")) cli-args)
+        flags-map (parse-flag-args (str/join " " flags))
+        the-params (if-not (empty? flags-map) (push positional flags-map)
+                           positional)]
+    (println "the-params" the-params)
+    (fn [] (apply f the-params))))
+
+(defn resolve-command
+  "Resolve command function from commands map and return it with rest of args
+  applied as function parameters. Supports function defined directly in map or
+  as nested map with :handler"
+  [commands args]
+  (loop [args args
+         matched-command []]
+    (when-not (empty? args)
+      (let [lookup (push matched-command
+                         (keyword (first args)))
+            lookup-value (get-in commands lookup)  ; OPTIMIZE: traverse once
+            ;; Check if item is a map and has :handler key returning it's value
+            lookup-function (when (hash-map? lookup-value)
+                              (let [matched-item (:handler lookup-value)]
+                                (when (function? matched-item)
+                                  matched-item)))]
+        (cond
+          ;; Check for a nested map with :handler function
+          lookup-function
+          (prepare-fn-with-params lookup-function (rest args))
+
+          ;; Check for a plain function
+          (function? lookup-value)
+          (prepare-fn-with-params lookup-value (rest args))
+
+          ;; Match not found yet, traverse further
+          (hash-map? lookup-value) (recur (rest args) lookup))))))
+
+(comment
+  (function? (resolve-command
+              {:tables {:create (fn [] 1)
+                        :drop   (fn [] 2)}}
+              ["tables" "create" "bar" "foo=1"]))
+
+  (function? (resolve-command
+              {:tables {:create {:handler (fn [] 1)}
+                        :drop   (fn [] 2)}}
+              ["tables" "create"]))
+
+  (nil? (resolve-command
+         {:tables {:create (fn [] 1)
+                   :drop   (fn [] 2)}}
+         ["tables" "created"]))
+
+  ;;  Test invocation
+
+  (let [the-applied-fn
+        (resolve-command
+         {:addition
+          {:of-two
+           {:handler (fn [first second]
+                       (+ (php/intval first)
+                          (php/intval second)))}
+           }
+          }
+         ["addition" "of-two" "1" "2"])
+        ]
+    (= 3 (the-applied-fn))
+    )
+
+  (let [the-applied-fn
+        (resolve-command
+         {:addition
+          {:of-two
+           {:handler (fn [opts]
+                       (+ (php/intval (:first opts))
+                          (php/intval (:second opts))))}
+           }
+          }
+         ["addition" "of-two" "--first=3" "--second=2"])
+        ]
+    (= 5 (the-applied-fn))
+    )
+
+)
