@@ -1,0 +1,209 @@
+(ns js\cli
+  (:require phel\str))
+
+;;;; Phel utilities for command line interfaces
+
+(defn- parse-farg-tokens [s]
+  (loop [chars (php->phel (php/mb_str_split s))
+         current ""
+         tokens []
+         in-quotes nil
+         escaped false]
+    (cond
+      (empty? chars)
+      (if (empty? current)
+        tokens
+        (push tokens current))
+
+      escaped
+      (recur (rest chars)
+             (str current (first chars))
+             tokens
+             in-quotes
+             false)
+
+      (= (first chars) "\\" )
+      (if (and in-quotes
+               (not (empty? (rest chars)))
+               (= (first (rest chars)) "\\"))
+        ;; Handle double backslash inside quotes - convert to single backslash
+        (recur (rest (rest chars))
+               (str current "\\")
+               tokens
+               in-quotes
+               false)
+        ;; Single backslash handling
+        (if in-quotes
+          ;; Inside quotes: only escape quote characters, preserve other backslashes literally
+          (if (and (not (empty? (rest chars)))
+                   (= (first (rest chars)) in-quotes))
+            ;; Escaping the quote character
+            (recur (rest chars)
+                   current
+                   tokens
+                   in-quotes
+                   true)
+            ;; Literal backslash, preserve it
+            (recur (rest chars)
+                   (str current "\\")
+                   tokens
+                   in-quotes
+                   false))
+          ;; Outside quotes: escape any character (like spaces)
+          (recur (rest chars)
+                 current
+                 tokens
+                 in-quotes
+                 true)))
+
+      (and (nil? in-quotes) (or (= (first chars) "\"") (= (first chars) "'")))
+      (recur (rest chars)
+             current
+             tokens
+             (first chars)
+             false)
+
+      (and in-quotes (= (first chars) in-quotes))
+      (recur (rest chars)
+             current
+             tokens
+             nil
+             false)
+
+      (and (nil? in-quotes) (= (first chars) " "))
+      (if (empty? current)
+        (recur (rest chars) "" tokens nil false)
+        (recur (rest chars) "" (push tokens current) nil false))
+
+      :else
+      (recur (rest chars)
+             (str current (first chars))
+             tokens
+             in-quotes
+             false))))
+
+(defn- parse-farg-token [token]
+  (if (str/includes? token "=")
+    (let [[key val] (str/split token "/=/" 2)]
+      [(keyword (str/replace key "/--/" ""))
+       (if (empty? val) true val)])
+    [(keyword (str/replace token "/--/" "")) true]))
+
+(defn parse-flag-args
+  "Parses command line flag arguments into map.
+  Flag argument without value set defaults to value being true.
+  Time per call ~4.5ms."
+  [s]
+  (let [tokens (parse-farg-tokens s)]
+    (reduce (fn [acc token]
+              (let [[key val] (parse-farg-token token)]
+                (assoc acc key val)))
+            {}
+            tokens)))
+
+;; TESTS
+(comment
+  (and
+   (= (parse-flag-args
+       "--foo=\"two bar\" --baz=123")
+      {:foo "two bar" :baz "123"})
+
+   (= (parse-flag-args
+       "--foo=\"two bar\" --baz=123 --parsing")
+      {:foo "two bar" :baz "123" :parsing true})
+
+   (= (parse-flag-args
+       "--foo=\"two bar\" --baz=123 --parsing --more")
+      {:foo "two bar" :baz "123" :parsing true :more true})
+
+   (= (parse-flag-args
+       "--foo=\"two bar\" --baz=123 --parsing --more --harder=definitely")
+      {:foo "two bar" :baz "123" :parsing true :more true :harder "definitely"})
+
+   (= (parse-flag-args
+       "--foo=\"two bar\" --baz=123 --parsing GLITCH --harder=definitely")
+      {:foo "two bar" :baz "123" :parsing true :GLITCH true :harder "definitely"})
+
+   (= (parse-flag-args
+       "--path=~/Home/Old\ Program\ Files")
+      {:path "~/Home/Old Program Files"})
+
+   (= (parse-flag-args
+       "--backslash-maddness=\"Phel\\Compiler\\Domain\\Emitter\\OutputEmitter\\NodeEmitter\"")
+      {:backslash-maddness "Phel\\Compiler\\Domain\\Emitter\\OutputEmitter\\NodeEmitter"})
+
+   ;; Empty string
+   (= (parse-flag-args "")
+      {})
+
+   ;; Only spaces
+   (= (parse-flag-args "   ")
+      {})
+
+   ;; Single flag with no value
+   (= (parse-flag-args "--flag")
+      {:flag true})
+
+   ;; Single quotes
+   (= (parse-flag-args "--single='hello world'")
+      {:single "hello world"})
+
+   ;; Mixed quotes (should not match)
+   (= (parse-flag-args "--mixed=\"hello'")
+      {:mixed "hello'"})
+
+   ;; Unmatched quotes - opening quote only  ! (?)
+   (= (parse-flag-args "--unmatched=\"hello world")
+      {:unmatched "hello world"})
+
+   ;; Multiple equals signs
+   (= (parse-flag-args "--url=http://example.com/path?a=1&b=2")
+      {:url "http://example.com/path?a=1&b=2"})
+
+   ;; Consecutive spaces
+   (= (parse-flag-args "--flag1    --flag2")
+      {:flag1 true :flag2 true})
+
+   ;; Special characters in values
+   (= (parse-flag-args "--special=\"!@#$%^&*()\"")
+      {:special "!@#$%^&*()"})
+
+   ;; Escaped quote in middle
+   (= (parse-flag-args "--escaped=\"say \\\"hello\\\" world\"")
+      {:escaped "say \"hello\" world"})
+
+   ;; Multiple backslashes
+   (= (parse-flag-args "--multi=\"\\\\\\\\\"")
+      {:multi "\\\\"})
+
+   ;; Tab and newline characters (if supported)
+   (= (parse-flag-args "--whitespace=\"tab\there\nnewline\"")
+      {:whitespace "tab\there\nnewline"})
+
+   ;; Unicode characters
+   (= (parse-flag-args "--unicode=\"café naïve résumé\"")
+      {:unicode "café naïve résumé"})
+
+   ;; Flag name with special characters
+   (= (parse-flag-args "--flag-with-dashes=value")
+      {:flag-with-dashes "value"})
+
+   ;; Numbers as values
+   (= (parse-flag-args "--number=42 --float=3.14 --negative=-5")
+      {:number "42" :float "3.14" :negative "-5"})
+   )
+
+  ;; TODO failing tests, setup test runner properly before fix
+
+  ;; Spaces around equals
+  (= (parse-flag-args "--spaced = value")  ; => {:spaced true : true :value true}
+     {:spaced true := true :value true})
+
+  ;; Backslash at end of quoted string
+  (= (parse-flag-args "--trailing=\"path\\\"")  ; => {:trailing "path\""}
+     {:trailing "path\\"})
+
+  ;; Empty quotes  !
+  (= (parse-flag-args "--empty=\"\"")  ; => {:empty true}
+     {:empty ""})
+  )
