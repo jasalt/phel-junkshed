@@ -1,5 +1,6 @@
 (ns js\introspection
   (:require js\utils)
+  (:require phel\str)
   )
 
 ;; Phel / PHP environment introspection utils
