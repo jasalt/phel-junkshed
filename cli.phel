@@ -215,26 +215,26 @@
   )
 
 (defn- verify-arity
-  "Validates the `param-count` for given function `f`."
+  "Validates the `param-count` for given function `f`.
+  Throws on mismatch, returns true otherwise."
   [f param-count]
   (let [min-arity (get-min-arity f)
         arity (get-arity f)
         variadic (variadic? f)]
 
-    ;; TODO Does not document that the flag arguments are passed as single opts
     (when (< param-count min-arity)
       (throw (php/new \InvalidArgumentException
                       (str "Not enough parameters passed via CLI, required "
-                           min-arity (when variadic " or more for the function")))))
+                           min-arity (when variadic " or more for the function"
+                                           " (all flag arguments counted as one)")))))
 
     (when (and (> param-count arity) (not variadic))
       (throw (php/new \InvalidArgumentException
                       (str "Too many parameters passed via CLI, maximum "
-                           min-arity (when variadic " or more"))))
-      )
-    (println "Function min-arity:" min-arity "arity:" arity "variadic:" variadic)
-    )
-  )
+                           min-arity (when variadic " or more")
+                           " (all flag arguments counted as one)"))))
+    #_(println "Function min-arity:" min-arity "arity:" arity "variadic:" variadic))
+  true)
 
 
 (defn- prepare-fn
@@ -311,13 +311,9 @@
           {:of-two
            {:handler (fn [first second]
                        (+ (php/intval first)
-                          (php/intval second)))}
-           }
-          }
-         ["addition" "of-two" "1" "2"])
-        ]
-    (= 3 (the-applied-fn))
-    )
+                          (php/intval second)))}}}
+         ["addition" "of-two" "1" "2"])]
+    (= 3 (the-applied-fn)))
 
   (let [the-applied-fn
         (resolve-command
@@ -325,13 +321,9 @@
           {:of-two
            {:handler (fn [opts]
                        (+ (php/intval (:first opts))
-                          (php/intval (:second opts))))}
-           }
-          }
-         ["addition" "of-two" "--first=3" "--second=2"])
-        ]
-    (= 5 (the-applied-fn))
-    )
+                          (php/intval (:second opts))))}}}
+         ["addition" "of-two" "--first=3" "--second=2"])]
+    (= 5 (the-applied-fn)))
 
   (let [the-applied-fn
         (resolve-command
@@ -344,44 +336,30 @@
                           (php/intval (:second opts))))}
            }
           }
-         ["addition" "of-two" "--first=3" "--second=2"])
-        ]
-    (= 5 (the-applied-fn))
-    )
+         ["addition" "of-two" "--first=3" "--second=2"])]
+    (= 5 (the-applied-fn)))
 
 
 
   (function?
    (resolve-command
     {:fun
-     {:two-arity (fn [a b] (println "got: " a b))
-
-      }
-     }
+     {:two-arity (fn [a b] (println "got: " a b))}}
     ["fun" "two-arity" "one" "two"]))
 
   ;; Throws
   (resolve-command
     {:fun
-     {:two-arity (fn [a b] (println "got: " a b))
-
-      }
-     }
+     {:two-arity (fn [a b] (println "got: " a b))}}
     ["fun" "two-arity" "one"])
 
   (resolve-command
     {:fun
-     {:two-arity (fn [a b] (println "got: " a b))
-
-      }
-     }
+     {:two-arity (fn [a b] (println "got: " a b))}}
     ["fun" "two-arity"])
 
   (resolve-command
     {:fun
-     {:two-arity (fn [a b] (println "got: " a b))
-
-      }
-     }
+     {:two-arity (fn [a b] (println "got: " a b))}}
     ["fun" "two-arity" "one" "two" "three"])
 )
