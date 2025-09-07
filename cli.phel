@@ -1,7 +1,10 @@
 (ns js\cli
   (:require phel\str))
 
-;;;; Phel utilities for command line interfaces
+;; Phel utilities for command line interfaces
+;; Loosely inspired by:
+;; - https://github.com/babashka/cli
+;; - https://github.com/nextjournal/garden-cli/blob/8cbd0a719c7d0999dee93cb1e9e5387cb5e9ab1a/src/nextjournal/garden_cli.clj
 
 (defn- parse-farg-tokens [s]
   (loop [chars (php->phel (php/mb_str_split s))
