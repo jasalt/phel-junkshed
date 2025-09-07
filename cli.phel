@@ -216,12 +216,14 @@
   "Prepares given function applying parsed cli-args to it. One or more positional
   args can be passed before flag arguments, flag arguments are collected into a
   map as the last argument."
-  [f cli-args]
+  [f cli-args & [opts-spec]]
   (let [[positional flags] (split-with |(not (str/starts-with? $ "-")) cli-args)
         flags-map (parse-flag-args (str/join " " flags))
         the-params (if-not (empty? flags-map) (push positional flags-map)
                            positional)]
     (println "the-params" the-params)
+    (when opts-spec
+      (println "has spec" opts-spec))
     (fn [] (apply f the-params))))
 
 (defn resolve-command
@@ -239,11 +241,12 @@
             lookup-function (when (hash-map? lookup-value)
                               (let [matched-item (:handler lookup-value)]
                                 (when (function? matched-item)
-                                  matched-item)))]
+                                  matched-item)))
+            opts-spec (when lookup-function (:spec lookup-value))]
         (cond
           ;; Check for a nested map with :handler function
           lookup-function
-          (prepare-fn lookup-function (rest args))
+          (prepare-fn lookup-function (rest args) opts-spec)
 
           ;; Check for a plain function
           (function? lookup-value)
@@ -251,6 +254,9 @@
 
           ;; Match not found yet, traverse further
           (hash-map? lookup-value) (recur (rest args) lookup))))))
+
+;; TODO if command defined as map, check if it contains :spec, and do validation according to it
+;;      otherwise validate argument count using reflection (min-arity / max-arity)
 
 (comment
   (function? (resolve-command
@@ -298,4 +304,19 @@
     (= 5 (the-applied-fn))
     )
 
+  (let [the-applied-fn
+        (resolve-command
+         {:addition
+          {:of-two
+           {:spec {:first  {:require true :validate '(fn [x] (pos? (php/intval x)))}
+                   :second {:require true :validate '(fn [x] (pos? (php/intval x)))}}
+            :handler (fn [opts]
+                       (+ (php/intval (:first opts))
+                          (php/intval (:second opts))))}
+           }
+          }
+         ["addition" "of-two" "--first=3" "--second=2"])
+        ]
+    (= 5 (the-applied-fn))
+    )
 )
