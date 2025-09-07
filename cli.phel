@@ -1,5 +1,6 @@
 (ns js\cli
-  (:require phel\str))
+  (:require phel\str)
+  (:require js\validate-opts :refer [validate-opts]))
 
 ;; Phel utilities for command line interfaces
 ;; Loosely inspired by:
@@ -223,7 +224,9 @@
                            positional)]
     (println "the-params" the-params)
     (when opts-spec
-      (println "has spec" opts-spec))
+      (println "Validating opts for spec" opts-spec)
+      (validate-opts opts-spec flags-map)
+      )
     (fn [] (apply f the-params))))
 
 (defn resolve-command
