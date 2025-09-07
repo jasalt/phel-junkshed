@@ -1,5 +1,6 @@
 (ns js\validate-opts
-  (:require js\wp))
+  ;;(:require js\wp)
+  )
 
 ## Option map validation taking some inspiration from https://github.com/babashka/cli
 ## Validates opts map given in following format:
@@ -8,7 +9,8 @@
   {:pdo-conn
    {:require  true                      # this should be set
     :validate 'pdo/connection?          # function used for validation, quoted so it's definition can be printed on failure
-    :default |(wp/pdo-get-connection)}  # default value used by set-missing-opts-to-defaults, returns pdo connection using WPDB connection info
+    ;;:default |(wp/pdo-get-connection)  # default value used by set-missing-opts-to-defaults, returns pdo connection using WPDB connection info
+    }
 
    :excluded-barcode-prefixes
    {:require  true :validate '|(and (vector? $) (all? string? $))
@@ -17,8 +19,9 @@
    :negative-stock-policy
    {:require  true
     :validate '|(contains? php/ODOO_POL_SYNC_NEGATIVE_STOCK_POLICIES $)
-    :default  |(wp/get-cf-option
-                (str php/ODOO_POS_DB_PREFIX "_negative_stock_policy"))}
+    ;; :default  |(wp/get-cf-option
+    ;;             (str php/ODOO_POS_DB_PREFIX "_negative_stock_policy"))
+    }
    :initiator
    {:require false
     :validate '|(= :string (type $))}})
